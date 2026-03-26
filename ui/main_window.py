@@ -6,7 +6,7 @@ import os
 import shutil
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QLabel,
-    QPushButton, QFrame, QScrollArea, QFileDialog, QCheckBox, QMessageBox
+    QPushButton, QFrame, QScrollArea, QFileDialog, QCheckBox, QMessageBox, QMenu
 )
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QPixmap, QImage
@@ -64,7 +64,7 @@ class VideoCard(QFrame):
                 if fps > 0:
                     secs = int(frames / fps)
                     m, s = secs // 60, secs % 60
-                    self.setToolTip("时长: {:02d}:{:02d}\n点击另存为".format(m, s))
+                    self.setToolTip("时长: {:02d}:{:02d}".format(m, s))
         except:
             pass
 
@@ -90,16 +90,53 @@ class VideoCard(QFrame):
         except:
             pass
 
+    def _preview_video(self):
+        """预览视频"""
+        import subprocess
+        os.startfile(self.video_path)
+
+    def _save_video(self):
+        """另存为视频"""
+        name = os.path.basename(self.video_path)
+        default_path = os.path.join(os.path.expanduser("~"), "Videos", name)
+        path, _ = QFileDialog.getSaveFileName(
+            self, "保存视频", default_path, "视频 (*.mp4 *.avi)"
+        )
+        if path:
+            shutil.copy2(self.video_path, path)
+            QMessageBox.information(self, "完成", "视频已保存到:\n{}".format(path))
+
     def mousePressEvent(self, event):
         if event.button() == Qt.MouseButton.LeftButton:
-            name = os.path.basename(self.video_path)
-            default_path = os.path.join(os.path.expanduser("~"), "Videos", name)
-            path, _ = QFileDialog.getSaveFileName(
-                self, "保存视频", default_path, "视频 (*.mp4 *.avi)"
-            )
-            if path:
-                shutil.copy2(self.video_path, path)
-                QMessageBox.information(self, "完成", "视频已保存到:\n{}".format(path))
+            # 左键预览
+            self._preview_video()
+        elif event.button() == Qt.MouseButton.RightButton:
+            # 右键显示菜单
+            menu = QMenu(self)
+            menu.setStyleSheet("""
+                QMenu {
+                    background-color: #1a1a2e;
+                    color: #ffffff;
+                    font-size: 18px;
+                    border: 1px solid #2a2a4a;
+                    border-radius: 8px;
+                    padding: 8px;
+                }
+                QMenu::item {
+                    padding: 10px 30px;
+                    border-radius: 6px;
+                }
+                QMenu::item:selected {
+                    background-color: #0f3460;
+                }
+            """)
+            preview_action = menu.addAction("▶  预览")
+            save_action = menu.addAction("💾  另存为")
+            action = menu.exec(event.globalPosition().toPoint())
+            if action == preview_action:
+                self._preview_video()
+            elif action == save_action:
+                self._save_video()
 
 
 class MonitorSelector(QFrame):
@@ -331,11 +368,13 @@ class MainWindow(QMainWindow):
         self.setStyleSheet("""
             #centralWidget { background: transparent; }
             #mainCard { background-color: #1a1a2e; border-radius: 16px; border: 1px solid #2a2a4a; }
-            #statusLabel { color: #00d9ff; font-size: 28px; font-weight: bold; margin-left: 12px; }
+            #statusLabel { color: #00d9ff; font-size: 30px; font-weight: bold; margin-left: 12px; }
             QPushButton { background-color: #0f3460; color: #ffffff; border: none; border-radius: 12px;
                 padding: 14px 30px; font-size: 24px; font-weight: bold; }
             QPushButton:hover { background-color: #1a4a80; }
             QPushButton:disabled { background-color: #2a2a4a; color: #5a5a7a; }
+            QToolTip { font-size: 20px; padding: 6px 10px; border-radius: 6px; }
+            QMessageBox { font-size: 20px; }
         """)
 
     def mousePressEvent(self, event):

@@ -40,9 +40,10 @@ class RecordButton(QPushButton):
                     color: white;
                     border-radius: 55px;
                     border: 4px solid rgba(233, 69, 96, 0.4);
-                    font-size: 36px;
+                    font-size: 40px;
                     font-weight: bold;
                     padding: 0px;
+                    padding-bottom: 4px;
                 }}
                 QPushButton:hover {{
                     background-color: qlineargradient(x1:0, y1:0, x2:1, y2:1,
@@ -59,10 +60,11 @@ class RecordButton(QPushButton):
                     color: white;
                     border-radius: 55px;
                     border: none;
-                    font-size: 40px;
+                    font-size: 44px;
                     font-weight: bold;
                     padding: 0px;
                     padding-left: 8px;
+                    padding-bottom: 2px;
                 }}
                 QPushButton:hover {{
                     background-color: qlineargradient(x1:0, y1:0, x2:1, y2:1,
