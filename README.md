@@ -50,7 +50,7 @@ pyinstaller build.spec --clean
 
 ## 输出格式
 
-录制的视频保存在 `recordings` 目录，格式为 MP4。
+录制的视频保存在 `~/Videos/录屏王/` 目录，格式为 MP4。
 
 ## 系统要求
 

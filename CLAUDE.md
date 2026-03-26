@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-录屏大师 (Screen Recorder Master) - A Windows screen recording application with a modern dark-themed UI. Supports fullscreen recording, region selection, and multi-monitor recording.
+录屏王 (Screen Recorder King) - A Windows screen recording application with a modern dark-themed UI. Supports fullscreen recording, region selection, and multi-monitor recording.
 
 ## Commands
 
@@ -75,4 +75,11 @@ screen_recorder/
 
 ## Output Location
 
-Videos are saved to `~/Videos/录屏大师/` (user's Videos folder)
+Videos are saved to `~/Videos/录屏王/` (user's Videos folder)
+
+## Keyboard Shortcuts
+
+Handled in `ui/main_window.py` via `keyPressEvent`:
+- **F9**: Toggle recording (start/stop)
+- **F10**: Pause/resume recording
+- **ESC**: Exit application (only when not recording)
