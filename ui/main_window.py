@@ -307,7 +307,7 @@ class MainWindow(QMainWindow):
         self.pause_btn = QPushButton("⏸  暂停")
         self.pause_btn.setEnabled(False)
         self.pause_btn.clicked.connect(self._toggle_pause)
-        self.pause_btn.setFixedHeight(50)
+        self.pause_btn.setFixedHeight(70)
         bl.addWidget(self.pause_btn)
 
         self.record_btn = RecordButton()
@@ -317,7 +317,7 @@ class MainWindow(QMainWindow):
         self.stop_btn = QPushButton("⏹  停止")
         self.stop_btn.setEnabled(False)
         self.stop_btn.clicked.connect(self._stop_record)
-        self.stop_btn.setFixedHeight(50)
+        self.stop_btn.setFixedHeight(70)
         bl.addWidget(self.stop_btn)
 
         ct.addLayout(bl)
