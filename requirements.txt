@@ -5,3 +5,7 @@ numpy>=1.24.0
 pywin32>=305
 Pillow>=10.0.0
 pyinstaller>=6.0.0
+cryptography>=42.0
+qrcode>=7.4
+requests>=2.31
+PySide6-Fluent-Widgets>=1.7.0

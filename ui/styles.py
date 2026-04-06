@@ -1,6 +1,7 @@
 """
-现代化样式定义 - 精美的暗色主题
+现代化样式定义 - 精美的暗色主题 (DPI自适应)
 """
+from utils.config import sc
 
 # 颜色方案
 COLORS = {
@@ -21,31 +22,27 @@ COLORS = {
 MAIN_WINDOW_STYLE = f"""
 QWidget {{
     font-family: "Microsoft YaHei", "Segoe UI", Arial, sans-serif;
-    font-size: 14px;
+    font-size: {sc(14)}px;
 }}
 
-/* 主窗口 */
 QMainWindow {{
     background-color: {COLORS['bg_primary']};
 }}
 
-/* 中央控件 */
 QCentralWidget {{
     background-color: {COLORS['bg_primary']};
 }}
 
-/* 标签 */
 QLabel {{
     color: {COLORS['text_primary']};
     background-color: transparent;
 }}
 
-/* 按钮基础样式 */
 QPushButton {{
     border: none;
-    border-radius: 8px;
-    padding: 12px 24px;
-    font-size: 14px;
+    border-radius: {sc(8)}px;
+    padding: {sc(12)}px {sc(24)}px;
+    font-size: {sc(14)}px;
     font-weight: bold;
 }}
 
@@ -62,9 +59,9 @@ BUTTON_STYLES = {
             background-color: qlineargradient(x1:0, y1:0, x2:1, y2:1,
                 stop:0 #e94560, stop:1 #ff6b6b);
             color: white;
-            border-radius: 10px;
-            padding: 15px 30px;
-            font-size: 15px;
+            border-radius: {sc(10)}px;
+            padding: {sc(15)}px {sc(30)}px;
+            font-size: {sc(15)}px;
             font-weight: bold;
         }}
         QPushButton:hover {{
@@ -86,9 +83,9 @@ BUTTON_STYLES = {
             background-color: {COLORS['bg_card']};
             color: {COLORS['text_primary']};
             border: 2px solid {COLORS['border']};
-            border-radius: 10px;
-            padding: 15px 30px;
-            font-size: 15px;
+            border-radius: {sc(10)}px;
+            padding: {sc(15)}px {sc(30)}px;
+            font-size: {sc(15)}px;
             font-weight: bold;
         }}
         QPushButton:hover {{
@@ -111,11 +108,11 @@ BUTTON_STYLES = {
             color: white;
             border-radius: 50%;
             padding: 0px;
-            min-width: 80px;
-            max-width: 80px;
-            min-height: 80px;
-            max-height: 80px;
-            font-size: 28px;
+            min-width: {sc(80)}px;
+            max-width: {sc(80)}px;
+            min-height: {sc(80)}px;
+            max-height: {sc(80)}px;
+            font-size: {sc(28)}px;
         }}
         QPushButton:hover {{
             background-color: qlineargradient(x1:0, y1:0, x2:1, y2:1,
@@ -134,11 +131,11 @@ BUTTON_STYLES = {
             color: white;
             border-radius: 50%;
             padding: 0px;
-            min-width: 80px;
-            max-width: 80px;
-            min-height: 80px;
-            max-height: 80px;
-            font-size: 24px;
+            min-width: {sc(80)}px;
+            max-width: {sc(80)}px;
+            min-height: {sc(80)}px;
+            max-height: {sc(80)}px;
+            font-size: {sc(24)}px;
         }}
         QPushButton:hover {{
             background-color: qlineargradient(x1:0, y1:0, x2:1, y2:1,
@@ -155,9 +152,9 @@ BUTTON_STYLES = {
             background-color: {COLORS['bg_card']};
             color: {COLORS['text_secondary']};
             border: 2px solid transparent;
-            border-radius: 12px;
-            padding: 12px 20px;
-            font-size: 20px;
+            border-radius: {sc(12)}px;
+            padding: {sc(12)}px {sc(20)}px;
+            font-size: {sc(20)}px;
         }}
         QPushButton:hover {{
             background-color: #1a4a80;
@@ -176,7 +173,7 @@ BUTTON_STYLES = {
 CARD_STYLE = f"""
     QWidget#card {{
         background-color: {COLORS['bg_secondary']};
-        border-radius: 20px;
+        border-radius: {sc(20)}px;
         border: 1px solid {COLORS['border']};
     }}
 """
@@ -185,18 +182,18 @@ CARD_STYLE = f"""
 TITLE_BAR_STYLE = f"""
     QWidget#titleBar {{
         background-color: {COLORS['bg_secondary']};
-        border-top-left-radius: 15px;
-        border-top-right-radius: 15px;
+        border-top-left-radius: {sc(15)}px;
+        border-top-right-radius: {sc(15)}px;
     }}
 
     QPushButton#closeBtn {{
         background-color: transparent;
         color: {COLORS['text_secondary']};
         border: none;
-        border-radius: 12px;
-        padding: 5px;
-        min-width: 30px;
-        min-height: 30px;
+        border-radius: {sc(12)}px;
+        padding: {sc(5)}px;
+        min-width: {sc(30)}px;
+        min-height: {sc(30)}px;
     }}
 
     QPushButton#closeBtn:hover {{
@@ -208,10 +205,10 @@ TITLE_BAR_STYLE = f"""
         background-color: transparent;
         color: {COLORS['text_secondary']};
         border: none;
-        border-radius: 12px;
-        padding: 5px;
-        min-width: 30px;
-        min-height: 30px;
+        border-radius: {sc(12)}px;
+        padding: {sc(5)}px;
+        min-width: {sc(30)}px;
+        min-height: {sc(30)}px;
     }}
 
     QPushButton#minBtn:hover {{
@@ -224,11 +221,11 @@ TITLE_BAR_STYLE = f"""
 STATUS_LABEL_STYLE = f"""
     QLabel#statusLabel {{
         color: {COLORS['success']};
-        font-size: 14px;
+        font-size: {sc(14)}px;
         font-weight: bold;
-        padding: 5px 15px;
+        padding: {sc(5)}px {sc(15)}px;
         background-color: rgba(0, 217, 255, 0.1);
-        border-radius: 15px;
+        border-radius: {sc(15)}px;
     }}
 """
 
@@ -236,9 +233,9 @@ STATUS_LABEL_STYLE = f"""
 TIME_LABEL_STYLE = f"""
     QLabel#timeLabel {{
         color: {COLORS['text_primary']};
-        font-size: 36px;
+        font-size: {sc(36)}px;
         font-weight: bold;
         font-family: "Consolas", "Courier New", monospace;
-        letter-spacing: 2px;
+        letter-spacing: {sc(2)}px;
     }}
 """

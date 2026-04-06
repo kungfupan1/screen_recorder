@@ -1,12 +1,15 @@
+# -*- coding: utf-8 -*-
 """
-自定义控件 - 现代化UI组件
+自定义控件 - 现代化UI组件 (DPI自适应)
 """
 from PySide6.QtWidgets import (
     QWidget, QPushButton, QLabel, QHBoxLayout, QFrame
 )
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QPainter, QColor, QBrush, QFont
+
 from ui.styles import COLORS, BUTTON_STYLES, TIME_LABEL_STYLE, CARD_STYLE, TITLE_BAR_STYLE
+from utils.config import sc
 
 
 class ModernButton(QPushButton):
@@ -26,24 +29,25 @@ class RecordButton(QPushButton):
         super().__init__(parent)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self._is_recording = False
-        self.setFixedSize(110, 110)  # 稍微大一点
+        btn = sc(110)
+        self.setFixedSize(btn, btn)
         self._apply_style()
 
     def _apply_style(self):
         if self._is_recording:
-            # 录制中显示停止符号 ■ - 居中对齐
             self.setText("■")
+            half = sc(55)
             self.setStyleSheet(f"""
                 QPushButton {{
                     background-color: qlineargradient(x1:0, y1:0, x2:1, y2:1,
                         stop:0 #e94560, stop:1 #c93050);
                     color: white;
-                    border-radius: 55px;
+                    border-radius: {half}px;
                     border: 4px solid rgba(233, 69, 96, 0.4);
-                    font-size: 60px;
+                    font-size: {sc(60)}px;
                     font-weight: bold;
                     padding: 0px;
-                    padding-bottom: 20px;
+                    padding-bottom: {sc(20)}px;
                 }}
                 QPushButton:hover {{
                     background-color: qlineargradient(x1:0, y1:0, x2:1, y2:1,
@@ -51,20 +55,20 @@ class RecordButton(QPushButton):
                 }}
             """)
         else:
-            # 就绪状态显示播放符号 ▶ - 居中对齐
             self.setText("▶")
+            half = sc(55)
             self.setStyleSheet(f"""
                 QPushButton {{
                     background-color: qlineargradient(x1:0, y1:0, x2:1, y2:1,
                         stop:0 #e94560, stop:1 #ff6b6b);
                     color: white;
-                    border-radius: 55px;
+                    border-radius: {half}px;
                     border: none;
-                    font-size: 66px;
+                    font-size: {sc(66)}px;
                     font-weight: bold;
                     padding: 0px;
-                    padding-left: 8px;
-                    padding-bottom: 2px;
+                    padding-left: {sc(8)}px;
+                    padding-bottom: {sc(2)}px;
                 }}
                 QPushButton:hover {{
                     background-color: qlineargradient(x1:0, y1:0, x2:1, y2:1,
@@ -84,7 +88,7 @@ class ModeButton(QPushButton):
         super().__init__(f"{icon}  {text}" if icon else text, parent)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setCheckable(True)
-        self.setFixedHeight(65)  # 增高以适应更大的字体
+        self.setFixedHeight(sc(65))
         self.setStyleSheet(BUTTON_STYLES['mode'])
 
 
@@ -94,7 +98,8 @@ class StatusIndicator(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self._status = "idle"
-        self.setFixedSize(14, 14)  # 稍大一点
+        dot = sc(14)
+        self.setFixedSize(dot, dot)
 
     def set_status(self, status: str):
         self._status = status
@@ -113,7 +118,8 @@ class StatusIndicator(QWidget):
 
         painter.setBrush(QBrush(color))
         painter.setPen(Qt.PenStyle.NoPen)
-        painter.drawEllipse(0, 0, 14, 14)
+        dot = sc(14)
+        painter.drawEllipse(0, 0, dot, dot)
 
 
 class TimeDisplay(QLabel):
@@ -124,7 +130,7 @@ class TimeDisplay(QLabel):
         self.setObjectName("timeLabel")
         self.setStyleSheet(TIME_LABEL_STYLE)
         self.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.setMinimumHeight(50)
+        self.setMinimumHeight(sc(50))
 
     def set_time(self, seconds: float):
         hours = int(seconds // 3600)
@@ -148,21 +154,21 @@ class TitleBar(QWidget):
     close_clicked = Signal()
     minimize_clicked = Signal()
 
-    def __init__(self, title="录屏王", parent=None):  # 默认改为"录屏王"
+    def __init__(self, title="录屏王", parent=None):
         super().__init__(parent)
         self.setObjectName("titleBar")
-        self.setFixedHeight(55)  # 增高一点
+        self.setFixedHeight(sc(55))
         self.setStyleSheet(TITLE_BAR_STYLE)
 
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(25, 0, 15, 0)
+        layout.setContentsMargins(sc(25), 0, sc(15), 0)
         layout.setSpacing(0)
 
         # 标题文字
         title_label = QLabel(f"◉ {title}")
         title_label.setStyleSheet(f"""
             color: {COLORS['text_primary']};
-            font-size: 28px;
+            font-size: {sc(28)}px;
             font-weight: bold;
             background: transparent;
         """)
@@ -172,7 +178,8 @@ class TitleBar(QWidget):
         # 最小化按钮
         min_btn = QPushButton("—")
         min_btn.setObjectName("minBtn")
-        min_btn.setFixedSize(35, 35)
+        btn_sz = sc(35)
+        min_btn.setFixedSize(btn_sz, btn_sz)
         min_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         min_btn.clicked.connect(self.minimize_clicked)
         layout.addWidget(min_btn)
@@ -180,7 +187,7 @@ class TitleBar(QWidget):
         # 关闭按钮
         close_btn = QPushButton("✕")
         close_btn.setObjectName("closeBtn")
-        close_btn.setFixedSize(35, 35)
+        close_btn.setFixedSize(btn_sz, btn_sz)
         close_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         close_btn.clicked.connect(self.close_clicked)
         layout.addWidget(close_btn)

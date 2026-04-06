@@ -2,6 +2,7 @@
 """
 配置管理
 """
+import ctypes
 import os
 import sys
 
@@ -20,6 +21,27 @@ def get_resource_path(relative_path):
     else:
         base_path = get_app_dir()
     return os.path.join(base_path, relative_path)
+
+
+def _get_dpi_scale():
+    """获取系统 DPI 缩放因子，用于 UI 尺寸适配。"""
+    if sys.platform == "win32":
+        try:
+            dc = ctypes.windll.user32.GetDC(0)
+            dpi = ctypes.windll.gdi32.GetDeviceCaps(dc, 88)  # LOGPIXELSX
+            ctypes.windll.user32.ReleaseDC(0, dc)
+            return max(dpi / 96.0, 1.0)
+        except Exception:
+            pass
+    return 1.0
+
+
+UI_SCALE = _get_dpi_scale()
+
+
+def sc(size):
+    """将设计尺寸按 DPI 缩放。"""
+    return int(size * UI_SCALE)
 
 
 # 默认配置

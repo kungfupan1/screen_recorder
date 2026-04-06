@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-主窗口 - 完善的录屏界面
+主窗口 - 完善的录屏界面 (DPI自适应)
 """
 import os
 import shutil
@@ -13,9 +13,11 @@ from PySide6.QtGui import QPixmap, QImage
 import cv2
 
 from ui.widgets import RecordButton, ModeButton, StatusIndicator, TimeDisplay, TitleBar
-from ui.styles import COLORS
+from ui.styles import COLORS, BUTTON_STYLES
 from recorder.controller import RecordController
 from recorder.area_selector import select_area
+from license.activation import check_activation
+from utils.config import sc
 
 
 class VideoCard(QFrame):
@@ -25,18 +27,18 @@ class VideoCard(QFrame):
         super().__init__(parent)
         self.video_path = video_path
         self.setObjectName("videoCard")
-        self.setFixedSize(160, 130)  # 稍微大一点
+        self.setFixedSize(sc(160), sc(130))
         self.setStyleSheet("""
             #videoCard { background-color: #0f3460; border-radius: 12px; border: 1px solid #2a2a4a; }
             #videoCard:hover { border-color: #00d9ff; background-color: #1a4a80; }
         """)
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(10, 10, 10, 10)
-        layout.setSpacing(6)
+        layout.setContentsMargins(sc(10), sc(10), sc(10), sc(10))
+        layout.setSpacing(sc(6))
 
         self.thumb = QLabel()
-        self.thumb.setFixedSize(140, 75)
+        self.thumb.setFixedSize(sc(140), sc(75))
         self.thumb.setStyleSheet("background-color: #16213e; border-radius: 6px;")
         self.thumb.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.thumb.setText("📹")
@@ -46,7 +48,7 @@ class VideoCard(QFrame):
         if len(name) > 22:
             name = name[:19] + "..."
         self.name_label = QLabel(name)
-        self.name_label.setStyleSheet("color: #ffffff; font-size: 18px; background: transparent;")
+        self.name_label.setStyleSheet("color: #ffffff; font-size: {}px; background: transparent;".format(sc(18)))
         self.name_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(self.name_label)
 
@@ -80,23 +82,21 @@ class VideoCard(QFrame):
                     if ret:
                         frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
                         h, w = frame.shape[:2]
-                        scale = min(140/w, 75/h)
-                        nw, nh = int(w*scale), int(h*scale)
+                        tw, th = sc(140), sc(75)
+                        scale = min(tw / w, th / h)
+                        nw, nh = int(w * scale), int(h * scale)
                         frame = cv2.resize(frame, (nw, nh))
-                        img = QImage(frame.data, nw, nh, 3*nw, QImage.Format.Format_RGB888)
+                        img = QImage(frame.data, nw, nh, 3 * nw, QImage.Format.Format_RGB888)
                         self.thumb.setPixmap(QPixmap.fromImage(img).scaled(
-                            140, 75, Qt.AspectRatioMode.KeepAspectRatio,
+                            tw, th, Qt.AspectRatioMode.KeepAspectRatio,
                             Qt.TransformationMode.SmoothTransformation))
         except:
             pass
 
     def _preview_video(self):
-        """预览视频"""
-        import subprocess
         os.startfile(self.video_path)
 
     def _save_video(self):
-        """另存为视频"""
         name = os.path.basename(self.video_path)
         default_path = os.path.join(os.path.expanduser("~"), "Videos", name)
         path, _ = QFileDialog.getSaveFileName(
@@ -108,16 +108,14 @@ class VideoCard(QFrame):
 
     def mousePressEvent(self, event):
         if event.button() == Qt.MouseButton.LeftButton:
-            # 左键预览
             self._preview_video()
         elif event.button() == Qt.MouseButton.RightButton:
-            # 右键显示菜单
             menu = QMenu(self)
             menu.setStyleSheet("""
                 QMenu {
                     background-color: #1a1a2e;
                     color: #ffffff;
-                    font-size: 18px;
+                    font-size: %dpx;
                     border: 1px solid #2a2a4a;
                     border-radius: 8px;
                     padding: 8px;
@@ -129,7 +127,7 @@ class VideoCard(QFrame):
                 QMenu::item:selected {
                     background-color: #0f3460;
                 }
-            """)
+            """ % sc(18))
             preview_action = menu.addAction("▶  预览")
             save_action = menu.addAction("💾  另存为")
             action = menu.exec(event.globalPosition().toPoint())
@@ -150,33 +148,33 @@ class MonitorSelector(QFrame):
     def setup_ui(self):
         self.setStyleSheet("background: transparent; border: none;")
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(10, 10, 10, 10)
-        layout.setSpacing(20)
+        layout.setContentsMargins(sc(10), sc(10), sc(10), sc(10))
+        layout.setSpacing(sc(20))
 
         monitors = RecordController.get_monitors()
         for i, m in enumerate(monitors):
-            cb = QCheckBox("显示器 {} ({}x{})".format(i+1, m['width'], m['height']))
+            cb = QCheckBox("显示器 {} ({}x{})".format(i + 1, m['width'], m['height']))
             cb.setChecked(i == 0)
-            cb.setMinimumHeight(45)
+            cb.setMinimumHeight(sc(45))
             cb.setStyleSheet("""
-                QCheckBox { color: #ffffff; font-size: 22px; spacing: 18px; }
-                QCheckBox::indicator { width: 32px; height: 32px; border-radius: 10px;
+                QCheckBox { color: #ffffff; font-size: %dpx; spacing: %dpx; }
+                QCheckBox::indicator { width: %dpx; height: %dpx; border-radius: %dpx;
                     border: 2px solid #2a2a4a; background-color: #16213e; }
                 QCheckBox::indicator:checked { background-color: #00d9ff; border-color: #00d9ff; }
                 QCheckBox::indicator:hover { border-color: #00d9ff; }
-            """)
+            """ % (sc(22), sc(18), sc(32), sc(32), sc(10)))
             layout.addWidget(cb)
             self.checkboxes.append(cb)
 
         hint = QLabel("可勾选多个显示器同时录制")
-        hint.setStyleSheet("color: #808080; font-size: 20px; margin-top: 12px;")
+        hint.setStyleSheet("color: #808080; font-size: %dpx; margin-top: %dpx;" % (sc(20), sc(12)))
         layout.addWidget(hint)
 
         if len(monitors) <= 1:
             self.hide()
 
     def get_selected(self):
-        return [i+1 for i, cb in enumerate(self.checkboxes) if cb.isChecked()]
+        return [i + 1 for i, cb in enumerate(self.checkboxes) if cb.isChecked()]
 
     def setEnabled(self, enabled):
         for cb in self.checkboxes:
@@ -188,20 +186,20 @@ class MainWindow(QMainWindow):
 
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("录屏王")  # 改名
+        self.setWindowTitle("录屏王")
+        self.setMinimumSize(sc(670), sc(1260))
+        self.resize(sc(670), sc(1260))
 
-        # 恢复之前的大窗口尺寸，拉长20%
-        self.setMinimumSize(670, 1260)
-        self.resize(670, 1260)
-
-        # 初始化录制器
-        self.recorder = RecordController()
         self.setWindowFlags(Qt.WindowType.FramelessWindowHint)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
 
         self._drag_pos = None
 
-        # 使用用户视频目录保存录制文件
+        # 许可证检查
+        act = check_activation()
+        self._license_activated = act.get("activated", False)
+
+        # 录制目录
         user_videos = os.path.join(os.path.expanduser("~"), "Videos", "录屏王")
         if not os.path.exists(user_videos):
             os.makedirs(user_videos)
@@ -223,7 +221,7 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(central)
 
         layout = QVBoxLayout(central)
-        layout.setContentsMargins(18, 18, 18, 18)
+        layout.setContentsMargins(sc(18), sc(18), sc(18), sc(18))
 
         card = QFrame()
         card.setObjectName("mainCard")
@@ -232,7 +230,7 @@ class MainWindow(QMainWindow):
         cl = QVBoxLayout(card)
         cl.setContentsMargins(0, 0, 0, 0)
 
-        # 标题栏 - 改名
+        # 标题栏
         title = TitleBar("录屏王")
         title.close_clicked.connect(self._on_close)
         title.minimize_clicked.connect(self.showMinimized)
@@ -241,8 +239,8 @@ class MainWindow(QMainWindow):
         # 内容区域
         content = QWidget()
         ct = QVBoxLayout(content)
-        ct.setContentsMargins(30, 25, 30, 25)
-        ct.setSpacing(18)  # 增加间距
+        ct.setContentsMargins(sc(30), sc(25), sc(30), sc(25))
+        ct.setSpacing(sc(18))
 
         # 状态区
         sframe = QFrame()
@@ -266,9 +264,9 @@ class MainWindow(QMainWindow):
         self.info_frame = QFrame()
         self.info_frame.setStyleSheet("background: #16213e; border-radius: 10px;")
         info_layout = QVBoxLayout(self.info_frame)
-        info_layout.setContentsMargins(18, 14, 18, 14)
+        info_layout.setContentsMargins(sc(18), sc(14), sc(18), sc(14))
         self.info_label = QLabel("选择录制模式后点击开始")
-        self.info_label.setStyleSheet("color: #a0a0a0; font-size: 22px;")
+        self.info_label.setStyleSheet("color: #a0a0a0; font-size: %dpx;" % sc(22))
         self.info_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         info_layout.addWidget(self.info_label)
         ct.addWidget(self.info_frame)
@@ -278,7 +276,7 @@ class MainWindow(QMainWindow):
         # 模式选择
         ct.addWidget(self._label("录制模式"))
         ml = QHBoxLayout()
-        ml.setSpacing(18)
+        ml.setSpacing(sc(18))
 
         self.fullscreen_btn = ModeButton("全屏录制", "🖥")
         self.fullscreen_btn.setChecked(True)
@@ -298,16 +296,16 @@ class MainWindow(QMainWindow):
 
         ct.addWidget(self._line())
 
-        # 控制按钮 - 三个按钮放在同一行
-        ct.addSpacing(12)
+        # 控制按钮
+        ct.addSpacing(sc(12))
 
         bl = QHBoxLayout()
-        bl.setSpacing(20)
+        bl.setSpacing(sc(20))
 
         self.pause_btn = QPushButton("⏸  暂停")
         self.pause_btn.setEnabled(False)
         self.pause_btn.clicked.connect(self._toggle_pause)
-        self.pause_btn.setFixedHeight(70)
+        self.pause_btn.setFixedHeight(sc(70))
         bl.addWidget(self.pause_btn)
 
         self.record_btn = RecordButton()
@@ -317,7 +315,7 @@ class MainWindow(QMainWindow):
         self.stop_btn = QPushButton("⏹  停止")
         self.stop_btn.setEnabled(False)
         self.stop_btn.clicked.connect(self._stop_record)
-        self.stop_btn.setFixedHeight(70)
+        self.stop_btn.setFixedHeight(sc(70))
         bl.addWidget(self.stop_btn)
 
         ct.addLayout(bl)
@@ -329,24 +327,24 @@ class MainWindow(QMainWindow):
 
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
-        scroll.setFixedHeight(150)  # 调整高度
+        scroll.setFixedHeight(sc(150))
         scroll.setStyleSheet("""
             QScrollArea { background: transparent; border: 1px solid #2a2a4a; border-radius: 12px; }
-            QScrollBar:horizontal { height: 10px; background: #16213e; border-radius: 5px; }
-            QScrollBar::handle:horizontal { background: #e94560; border-radius: 5px; }
-        """)
+            QScrollBar:horizontal { height: %dpx; background: #16213e; border-radius: %dpx; }
+            QScrollBar::handle:horizontal { background: #e94560; border-radius: %dpx; min-width: %dpx; }
+        """ % (sc(10), sc(5), sc(5), sc(30)))
 
         self.video_container = QWidget()
         self.video_layout = QHBoxLayout(self.video_container)
-        self.video_layout.setContentsMargins(12, 12, 12, 12)
-        self.video_layout.setSpacing(12)
+        self.video_layout.setContentsMargins(sc(12), sc(12), sc(12), sc(12))
+        self.video_layout.setSpacing(sc(12))
         self.video_layout.addStretch()
         scroll.setWidget(self.video_container)
         ct.addWidget(scroll)
 
         # 底部提示
         hint = QLabel("F9 开始/停止  |  F10 暂停/继续  |  ESC 退出")
-        hint.setStyleSheet("color: #808080; font-size: 20px;")
+        hint.setStyleSheet("color: #808080; font-size: %dpx;" % sc(20))
         hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
         ct.addWidget(hint)
 
@@ -355,7 +353,7 @@ class MainWindow(QMainWindow):
 
     def _label(self, text):
         l = QLabel(text)
-        l.setStyleSheet("color: #a0a0a0; font-size: 22px; font-weight: bold;")
+        l.setStyleSheet("color: #a0a0a0; font-size: %dpx; font-weight: bold;" % sc(22))
         return l
 
     def _line(self):
@@ -368,25 +366,14 @@ class MainWindow(QMainWindow):
         self.setStyleSheet("""
             #centralWidget { background: transparent; }
             #mainCard { background-color: #1a1a2e; border-radius: 16px; border: 1px solid #2a2a4a; }
-            #statusLabel { color: #00d9ff; font-size: 30px; font-weight: bold; margin-left: 12px; }
+            #statusLabel { color: #00d9ff; font-size: %dpx; font-weight: bold; margin-left: %dpx; }
             QPushButton { background-color: #0f3460; color: #ffffff; border: none; border-radius: 12px;
-                padding: 14px 30px; font-size: 24px; font-weight: bold; }
+                padding: %dpx %dpx; font-size: %dpx; font-weight: bold; }
             QPushButton:hover { background-color: #1a4a80; }
             QPushButton:disabled { background-color: #2a2a4a; color: #5a5a7a; }
-            QToolTip { font-size: 20px; padding: 6px 10px; border-radius: 6px; }
-            QMessageBox { font-size: 20px; }
-        """)
-
-    def mousePressEvent(self, event):
-        if event.button() == Qt.MouseButton.LeftButton:
-            self._drag_pos = event.globalPosition().toPoint() - self.frameGeometry().topLeft()
-
-    def mouseMoveEvent(self, event):
-        if self._drag_pos:
-            self.move(event.globalPosition().toPoint() - self._drag_pos)
-
-    def mouseReleaseEvent(self, event):
-        self._drag_pos = None
+            QToolTip { font-size: %dpx; padding: 6px 10px; border-radius: 6px; }
+            QMessageBox { font-size: %dpx; }
+        """ % (sc(30), sc(12), sc(14), sc(30), sc(24), sc(20), sc(20)))
 
     def _set_mode(self, mode):
         self.record_mode = mode
@@ -405,6 +392,9 @@ class MainWindow(QMainWindow):
         if self.recorder.is_recording:
             self._stop_record()
         else:
+            if not self._license_activated:
+                self._show_payment_dialog()
+                return
             self._start_record()
 
     def _start_record(self):
@@ -485,11 +475,21 @@ class MainWindow(QMainWindow):
 
         colors = {"recording": "#e94560", "paused": "#ffc107", "idle": "#00d9ff"}
         self.status_label.setStyleSheet(
-            "color: {}; font-size: 17px; font-weight: bold; margin-left: 12px;".format(
-                colors.get(status, "#ffffff")))
+            "color: {}; font-size: {}px; font-weight: bold; margin-left: {}px;".format(
+                colors.get(status, "#ffffff"), sc(17), sc(12)))
 
     def _on_status(self, status):
         pass
+
+    def _show_payment_dialog(self):
+        from ui.pay_dialog import PayDialog
+        self._pay_dialog = PayDialog(self)
+        self._pay_dialog.payment_success.connect(self._on_payment_success)
+        self._pay_dialog.show()
+
+    def _on_payment_success(self):
+        self._license_activated = True
+        self._start_record()
 
     def _on_complete(self, path):
         if os.path.exists(path):
@@ -497,11 +497,21 @@ class MainWindow(QMainWindow):
             self.video_layout.insertWidget(0, card)
 
     def _on_close(self):
-        """标题栏关闭按钮"""
         self.close()
 
+    # === 拖拽 ===
+    def mousePressEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            self._drag_pos = event.globalPosition().toPoint() - self.frameGeometry().topLeft()
+
+    def mouseMoveEvent(self, event):
+        if self._drag_pos:
+            self.move(event.globalPosition().toPoint() - self._drag_pos)
+
+    def mouseReleaseEvent(self, event):
+        self._drag_pos = None
+
     def closeEvent(self, event):
-        """拦截系统关闭事件（Alt+F4、任务栏关闭等）"""
         if self.recorder.is_recording:
             reply = QMessageBox.question(
                 self, "确认退出",

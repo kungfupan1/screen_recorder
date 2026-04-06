@@ -27,13 +27,14 @@ if APP_DIR not in sys.path:
 
 from PySide6.QtWidgets import QApplication
 from PySide6.QtGui import QFont
+from utils.config import UI_SCALE
 from ui.main_window import MainWindow
 
 def main():
     app = QApplication(sys.argv)
     app.setApplicationName("录屏王")
     app.setApplicationVersion("1.0.0")
-    font = QFont("Microsoft YaHei", 16)
+    font = QFont("Microsoft YaHei", max(16, int(14 * UI_SCALE)))
     app.setFont(font)
 
     window = MainWindow()
