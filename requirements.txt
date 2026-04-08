@@ -9,3 +9,5 @@ cryptography>=42.0
 qrcode>=7.4
 requests>=2.31
 PySide6-Fluent-Widgets>=1.7.0
+PyAudioWPatch>=0.2.12
+av>=12.0.0

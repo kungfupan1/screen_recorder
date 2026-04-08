@@ -146,6 +146,11 @@ class RecordController:
         self._paused_duration = 0
         self._pause_start_time = 0
 
+        # 音频控制
+        self.record_mic = True
+        self.record_system = True
+        self._audio_capture = None
+
         self.on_status_changed = None
         self.on_recording_complete = None
 
@@ -205,6 +210,19 @@ class RecordController:
             if not self.recorders:
                 raise RuntimeError("没有有效的录制目标")
 
+            # 启动音频采集
+            self._audio_capture = None
+            if self.record_mic or self.record_system:
+                from recorder.audio_capture import AudioCapture
+                audio_path = os.path.join(self.output_dir, f"audio_{timestamp}.wav")
+                self._audio_capture = AudioCapture(
+                    audio_path,
+                    record_mic=self.record_mic,
+                    record_system=self.record_system
+                )
+                if not self._audio_capture.start():
+                    self._audio_capture = None
+
             self.is_recording = True
             self.is_paused = False
             self._start_time = time.time()
@@ -213,7 +231,8 @@ class RecordController:
             if self.on_status_changed:
                 self.on_status_changed("recording")
 
-            print(f"开始录制 {len(self.recorders)} 个视频")
+            print(f"开始录制 {len(self.recorders)} 个视频" +
+                  (" + 音频" if self._audio_capture else ""))
             return output_paths
 
         except Exception as e:
@@ -228,6 +247,8 @@ class RecordController:
             self.is_paused = True
             for recorder in self.recorders:
                 recorder.pause()
+            if self._audio_capture:
+                self._audio_capture.pause()
 
             self._pause_start_time = time.time()
             if self.on_status_changed:
@@ -239,6 +260,8 @@ class RecordController:
             self.is_paused = False
             for recorder in self.recorders:
                 recorder.resume()
+            if self._audio_capture:
+                self._audio_capture.resume()
 
             self._paused_duration += time.time() - self._pause_start_time
             if self.on_status_changed:
@@ -248,6 +271,13 @@ class RecordController:
         if not self.is_recording:
             return []
 
+        # 1. 停止音频采集
+        audio_path = None
+        if self._audio_capture:
+            audio_path = self._audio_capture.stop()
+            self._audio_capture = None
+
+        # 2. 停止视频录制
         for recorder in self.recorders:
             frames = recorder.stop()
             print(f"录制完成: {frames} 帧")
@@ -256,6 +286,28 @@ class RecordController:
         self.is_paused = False
 
         output_paths = [r.output_path for r in self.recorders]
+
+        # 3. 合并音频到视频
+        if audio_path and os.path.exists(audio_path):
+            from recorder.audio_capture import merge_audio_video
+            merged = []
+            for vp in output_paths:
+                base, ext = os.path.splitext(vp)
+                final_path = base + "_merged" + ext
+                result = merge_audio_video(vp, audio_path, final_path)
+                if result == final_path and os.path.exists(final_path):
+                    try:
+                        os.remove(vp)
+                    except:
+                        pass
+                    merged.append(final_path)
+                else:
+                    merged.append(vp)
+            output_paths = merged
+            try:
+                os.remove(audio_path)
+            except:
+                pass
 
         if self.on_status_changed:
             self.on_status_changed("stopped")

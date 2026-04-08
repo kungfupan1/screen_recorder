@@ -6,14 +6,15 @@ import os
 import shutil
 import random
 import ctypes
+import tempfile
 from ctypes import wintypes
 
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QLabel,
     QPushButton, QFrame, QScrollArea, QFileDialog, QCheckBox, QMessageBox, QMenu
 )
-from PySide6.QtCore import Qt, QTimer, QPoint, QRect
-from PySide6.QtGui import QPixmap, QImage, QColor, QPainter, QRadialGradient
+from PySide6.QtCore import Qt, QTimer, QPoint, QPointF, QRect
+from PySide6.QtGui import QPixmap, QImage, QColor, QPainter, QRadialGradient, QPen, QBrush
 
 import cv2
 
@@ -54,6 +55,57 @@ WMSZ_BOTTOMLEFT = 7
 WMSZ_BOTTOMRIGHT = 8
 
 _BORDER = 8
+
+
+# ────────────────── 勾选框样式工具 ──────────────────
+def _gen_cb_images(sz):
+    """生成带 ✓ 打勾图标和空白图标的 PNG，返回 (checked_url, unchecked_url)"""
+    r = max(1, int(sz * 0.28))
+
+    # --- Checked: 青色底 + 白色 ✓ ---
+    pm = QPixmap(sz, sz)
+    pm.fill(Qt.GlobalColor.transparent)
+    p = QPainter(pm)
+    p.setRenderHint(QPainter.RenderHint.Antialiasing)
+    p.setBrush(QBrush(QColor("#00d9ff")))
+    p.setPen(Qt.PenStyle.NoPen)
+    p.drawRoundedRect(0, 0, sz, sz, r, r)
+    lw = max(2.0, sz / 10.0)
+    pen = QPen(QColor("#ffffff"), lw)
+    pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+    pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+    p.setPen(pen)
+    p.drawLine(QPointF(sz * 0.22, sz * 0.50), QPointF(sz * 0.40, sz * 0.68))
+    p.drawLine(QPointF(sz * 0.40, sz * 0.68), QPointF(sz * 0.78, sz * 0.30))
+    p.end()
+    path_on = os.path.join(tempfile.gettempdir(), f"_cb_on_{sz}.png").replace("\\", "/")
+    pm.save(path_on, "PNG")
+
+    # --- Unchecked: 暗灰底 + 浅灰边 ---
+    pm2 = QPixmap(sz, sz)
+    pm2.fill(Qt.GlobalColor.transparent)
+    p2 = QPainter(pm2)
+    p2.setRenderHint(QPainter.RenderHint.Antialiasing)
+    p2.setPen(QPen(QColor(255, 255, 255, 60), 1))
+    p2.setBrush(QColor(255, 255, 255, 15))
+    p2.drawRoundedRect(0, 0, sz, sz, r, r)
+    p2.end()
+    path_off = os.path.join(tempfile.gettempdir(), f"_cb_off_{sz}.png").replace("\\", "/")
+    pm2.save(path_off, "PNG")
+
+    return path_on, path_off
+
+
+def _cb_style(z, font_sz=22, ind_sz=32, spacing=12):
+    """生成带 ✓ 打勾图标的 QCheckBox 样式表"""
+    sz = wsc(ind_sz, z)
+    on_url, off_url = _gen_cb_images(sz)
+    return (
+        "QCheckBox { color: #888888; font-size: %dpx; spacing: %dpx; background: transparent; }"
+        "QCheckBox:checked { color: #ffffff; }"
+        "QCheckBox::indicator { width: %dpx; height: %dpx; image: url(%s); }"
+        "QCheckBox::indicator:checked { image: url(%s); }"
+    ) % (wsc(font_sz, z), wsc(spacing, z), sz, sz, off_url, on_url)
 
 
 class MINMAXINFO(ctypes.Structure):
@@ -297,13 +349,7 @@ class MonitorSelector(QFrame):
             cb = QCheckBox("显示器 {} ({}x{})".format(i + 1, m['width'], m['height']))
             cb.setChecked(i == 0)
             cb.setMinimumHeight(wsc(45, z))
-            cb.setStyleSheet("""
-                QCheckBox { color: #ffffff; font-size: %dpx; spacing: %dpx; }
-                QCheckBox::indicator { width: %dpx; height: %dpx; border-radius: %dpx;
-                    border: 1px solid rgba(255, 255, 255, 0.2); background-color: rgba(0, 0, 0, 0.2); }
-                QCheckBox::indicator:checked { background-color: #00d9ff; border-color: #00d9ff; }
-                QCheckBox::indicator:hover { border-color: #00d9ff; }
-            """ % (wsc(22, z), wsc(18, z), wsc(32, z), wsc(32, z), wsc(10, z)))
+            cb.setStyleSheet(_cb_style(z, font_sz=22, ind_sz=32, spacing=18))
             layout.addWidget(cb)
             self.checkboxes.append(cb)
 
@@ -329,13 +375,7 @@ class MonitorSelector(QFrame):
         self._layout.setSpacing(wsc(20, z))
         for cb in self.checkboxes:
             cb.setMinimumHeight(wsc(45, z))
-            cb.setStyleSheet("""
-                QCheckBox { color: #ffffff; font-size: %dpx; spacing: %dpx; }
-                QCheckBox::indicator { width: %dpx; height: %dpx; border-radius: %dpx;
-                    border: 1px solid rgba(255, 255, 255, 0.2); background-color: rgba(0, 0, 0, 0.2); }
-                QCheckBox::indicator:checked { background-color: #00d9ff; border-color: #00d9ff; }
-                QCheckBox::indicator:hover { border-color: #00d9ff; }
-            """ % (wsc(22, z), wsc(18, z), wsc(32, z), wsc(32, z), wsc(10, z)))
+            cb.setStyleSheet(_cb_style(z, font_sz=22, ind_sz=32, spacing=18))
         if self._hint:
             self._hint.setStyleSheet(
                 "color: #808080; font-size: %dpx; margin-top: %dpx; background: transparent;" % (wsc(20, z), wsc(12, z)))
@@ -532,6 +572,10 @@ class MainWindow(QMainWindow):
         self.region_btn.update_zoom(z)
         self._mode_layout.setSpacing(wsc(18, z))
 
+        # 音频勾选框
+        self.mic_check.setStyleSheet(_cb_style(z, font_sz=20, ind_sz=26))
+        self.sys_check.setStyleSheet(_cb_style(z, font_sz=20, ind_sz=26))
+
         # 显示器选择器
         self.monitor_selector.update_zoom(z)
 
@@ -667,6 +711,25 @@ class MainWindow(QMainWindow):
 
         ct.addSpacing(wsc(12, z))
 
+        # 音频控制
+        audio_layout = QHBoxLayout()
+        audio_layout.setSpacing(wsc(24, z))
+
+        self.mic_check = QCheckBox("🎤  麦克风")
+        self.mic_check.setChecked(True)
+        self.mic_check.stateChanged.connect(self._on_audio_toggle)
+        self.mic_check.setStyleSheet(_cb_style(z, font_sz=20, ind_sz=26))
+        audio_layout.addWidget(self.mic_check)
+
+        self.sys_check = QCheckBox("🔊  系统声音")
+        self.sys_check.setChecked(True)
+        self.sys_check.stateChanged.connect(self._on_audio_toggle)
+        self.sys_check.setStyleSheet(_cb_style(z, font_sz=20, ind_sz=26))
+        audio_layout.addWidget(self.sys_check)
+
+        audio_layout.addStretch()
+        ct.addLayout(audio_layout)
+
         # 控制按钮
         self._button_layout = QHBoxLayout()
         self._button_layout.setSpacing(wsc(20, z))
@@ -786,6 +849,10 @@ class MainWindow(QMainWindow):
             self._start_record()
 
     def _start_record(self):
+        # 设置音频开关
+        self.recorder.record_mic = self.mic_check.isChecked()
+        self.recorder.record_system = self.sys_check.isChecked()
+
         if self.record_mode == "region":
             self.info_label.setText("请在屏幕上拖拽选择录制区域...")
             self._current_info_text = self.info_label.text()
@@ -886,6 +953,13 @@ class MainWindow(QMainWindow):
     def _on_payment_success(self):
         self._license_activated = True
         self._start_record()
+
+    def _on_audio_toggle(self):
+        """实时切换麦克风/系统声音静音"""
+        cap = getattr(self.recorder, '_audio_capture', None)
+        if cap:
+            cap.mic_muted = not self.mic_check.isChecked()
+            cap.sys_muted = not self.sys_check.isChecked()
 
     def _on_complete(self, path):
         if os.path.exists(path):
