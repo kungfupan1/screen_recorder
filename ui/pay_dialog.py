@@ -24,7 +24,8 @@ from qfluentwidgets import FluentIcon as FIF
 
 # --- 业务逻辑导入 (绝对保留) ---
 from license.machine_code import get_machine_code
-from license.activation import activate_with_code
+from license.activation import activate_with_code, check_activation
+from datetime import datetime
 from license import api_client
 from license.cache_manager import save_plans_cache
 from utils.config import sc, wsc
@@ -79,7 +80,45 @@ AGREEMENT_HTML = """
 </body></html>
 """
 
+class AnimatedPriceLabel(QLabel):
+    """支持数字丝滑滚动动画的金额标签"""
+    def __init__(self, zoom=1.0, parent=None):
+        super().__init__("￥0.00", parent)
+        self._zoom = zoom
+        self._current_val = 0.0
+        self._target_val = 0.0
 
+        font_price = int(wsc(36, zoom))
+        self.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.setStyleSheet(
+            "color: #00d9ff; font-size: %dpx; font-weight: bold; background: transparent; outline: none;" % font_price
+        )
+
+        self._anim = QVariantAnimation(self)
+        self._anim.setDuration(400)  # 动画持续 400 毫秒
+        self._anim.setEasingCurve(QEasingCurve.Type.OutCubic) # 缓动效果：先快后慢，更自然
+        self._anim.valueChanged.connect(self._on_value_changed)
+
+    def set_price(self, target_price: float, animate=True):
+        # 【防抖核心】：如果目标价格和当前一模一样，直接拦截，绝对不乱跳！
+        if self._target_val == target_price:
+            return
+
+        self._target_val = target_price
+
+        if animate:
+            self._anim.stop()
+            self._anim.setStartValue(self._current_val)
+            self._anim.setEndValue(target_price)
+            self._anim.start()
+        else:
+            self._anim.stop()
+            self._current_val = target_price
+            self.setText(f"￥{target_price:.2f}")
+
+    def _on_value_changed(self, val):
+        self._current_val = float(val)
+        self.setText(f"￥{self._current_val:.2f}")
 # ────────────────── 动态失焦光斑背景底层 ──────────────────
 class BokehBackground(QWidget):
     """纯代码渲染的动态失焦光斑背景"""
@@ -192,15 +231,15 @@ class PlanCard(QWidget):
             days = 0
 
         if days == 1:
-            name_text = "单日通行证"
+            name_text = "单日体验包"
         elif days == 30:
-            name_text = "月度授权包"
+            name_text = "月度畅享包"
         elif days == 180 or days == 90:
-            name_text = "季度授权包"
+            name_text = "季度畅享包"
         elif days == 365:
-            name_text = "年度授权包"
+            name_text = "年度畅享包"
         elif days >= 9999:
-            name_text = "永久养老套餐"
+            name_text = "永久养老包"
         else:
             name_text = self.plan_data.get("name", "高级授权包")
 
@@ -484,24 +523,61 @@ class RedeemDialog(QWidget):
 # ────────────────── 主支付对话框 ──────────────────
 class PayDialog(QWidget):
     payment_success = Signal()
+    qr_preload_done = Signal(list)  # <--- 【新增】：用于后台向主界面传递二维码数据的信号
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowFlags(Qt.WindowType.FramelessWindowHint | Qt.WindowType.Dialog)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
 
-        max_w, max_h = sc(_PAY_BASE_W), sc(_PAY_BASE_H)
-        min_w, min_h = int(max_w * 0.5), int(max_h * 0.5)
-        self.setMinimumSize(min_w, min_h)
-        self.setMaximumSize(max_w, max_h)
-        self.resize(max_w, max_h)
+        # 1. 动态获取显示器高度并设置为 50% 作为【绝对固定尺寸】
+        screen = self.screen()
+        monitor_h = screen.geometry().height() if screen else 1080
+        default_h = int(monitor_h * 0.6)
+        default_w = int(default_h * (_PAY_BASE_W / _PAY_BASE_H))
 
-        self.setMouseTracking(True)
+        self.setFixedSize(default_w, default_h)
+
+        # 2. 【核心修复】：计算出正确的静态缩放比例 _zoom，这样下面就不会报错了！
+        self._zoom = default_w / sc(_PAY_BASE_W)
         self._drag_pos = None
-        self._resize_edge = 0
-        self._resize_start_geo = None
-        self._resize_start_pos = None
-        self._zoom = 1.0
+
+        # 3. 利用本地证书缓存计算剩余天数 (终极稳健版)
+        self.days_left = -2
+        self.raw_expire_str = ""
+        try:
+            act_info = check_activation()
+            if isinstance(act_info, dict) and act_info.get("activated"):
+                self.days_left = -1
+                exp_date_str = act_info.get("expire_date", "") or act_info.get("expire_time", "") or act_info.get(
+                    "deadline", "")
+
+                # 无论传进来什么，强制转为字符串并去掉首尾空格
+                self.raw_expire_str = str(exp_date_str).strip()
+
+                if self.raw_expire_str:
+                    if "9999" in self.raw_expire_str or "永久" in self.raw_expire_str:
+                        self.days_left = 99999
+                    else:
+                        try:
+                            # 终极暴力：不管多长，我们只切取最前面的 10 个字符
+                            # 因为截图显示后端传回的就是 2025-04-08 这种格式
+                            clean_date_str = self.raw_expire_str[:10]
+
+                            # 转换成时间对象
+                            exp_date = datetime.strptime(clean_date_str, "%Y-%m-%d")
+
+                            # 获取今天的时间，并将时分秒清零，保证天数计算准确
+                            today = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+
+                            # 计算差值（直接得出一个整数，可能是正数、0、负数）
+                            self.days_left = (exp_date - today).days
+                        except Exception as e:
+                            # 如果这里报错了，才会在控制台打印，并且保留 days_left = -1
+                            print(f"日期解析彻底失败，错误信息: {e}")
+                            pass
+        except Exception:
+            pass
 
         self._plans = []
         self._selected_plan = None
@@ -511,16 +587,12 @@ class PayDialog(QWidget):
         self._poll_timer.timeout.connect(self._poll_order)
         self._creating = False
 
-        # 防抖定时器
-        self._rebuild_timer = QTimer(self)
-        self._rebuild_timer.setSingleShot(True)
-        self._rebuild_timer.timeout.connect(self._do_rebuild)
+        # <--- 【新增】：告诉程序，只要收到 qr_preload_done 信号，就执行 _on_preload_done 替换图片
+        self.qr_preload_done.connect(self._on_preload_done)
 
         setTheme(Theme.DARK)
         setThemeColor("#00d9ff")
-
-        # 破除 FluentWidgets 全局黑底魔咒
-        self.setStyleSheet("PayDialog { background: transparent; }")
+        self.setStyleSheet("PayDialog { background: transparent; } * { outline: none; }")
 
         self._build_ui()
         self._load_plans()
@@ -528,16 +600,10 @@ class PayDialog(QWidget):
     def _build_ui(self):
         # 启用光斑底板
         self._main_card = BokehBackground(self)
-        self._main_card.setFixedSize(sc(_PAY_BASE_W), sc(_PAY_BASE_H))
-
-        shadow = QGraphicsDropShadowEffect(self._main_card)
-        shadow.setBlurRadius(30)
-        shadow.setColor(QColor(0, 0, 0, 80))
-        shadow.setOffset(0, 4)
-        self._main_card.setGraphicsEffect(shadow)
+        # 【核心修复】：让光斑背景和当前窗口一样大，不要写死！
+        self._main_card.setFixedSize(self.width(), self.height())
 
         self._build_content(self._zoom)
-
     def _build_content(self, zoom):
         """根据 zoom 构建 BokehBackground 内的全部内容"""
         z = zoom
@@ -562,7 +628,31 @@ class PayDialog(QWidget):
         title_text.setStyleSheet(
             "color: #ffffff; font-size: %dpx; font-weight: bold; background: transparent;" % font_lg)
         tbl.addWidget(title_text)
+
+        # 弹簧，把后面的控件推到最右边
         tbl.addStretch()
+
+        # 右上角显示剩余天数 (精准状态展示)
+        if self.days_left == -2:
+            days_str = "当前未订阅"
+        elif self.days_left == -1:
+            # 读取到了激活状态，但日期没解析出来，直接显示原文字符串
+            days_str = f"👑 已激活 ({self.raw_expire_str})" if self.raw_expire_str else "👑 已激活"
+        elif self.days_left > 9000:
+            days_str = "👑 永久授权"
+        elif self.days_left > 0:
+            days_str = f"👑 当前剩余: {self.days_left} 天"
+        elif self.days_left == 0:
+            days_str = "⚠️ 订阅今日到期"
+        else:
+            days_str = f"⚠️ 订阅已过期 {-self.days_left} 天"
+
+        self.vip_days_label = QLabel(days_str)
+        self.vip_days_label.setStyleSheet(
+            "color: #ffda6a; font-weight: bold; font-size: %dpx; background: transparent; outline: none;" % font_md)
+        tbl.addWidget(self.vip_days_label)
+
+        self._more_btn = TransparentToolButton(FIF.MORE, self)
 
         self._more_btn = TransparentToolButton(FIF.MORE, self)
         self._more_menu = RoundMenu(parent=self)
@@ -600,7 +690,7 @@ class PayDialog(QWidget):
         left_lay.setContentsMargins(0, 0, 0, 0)
         left_lay.setSpacing(wsc(6, z))
 
-        hint = QLabel("选择授权方案")
+        hint = QLabel("选择订阅方案")
         hint.setStyleSheet("color: #a0a0a0; font-size: %dpx; font-weight: bold; background: transparent;" % font_md)
         left_lay.addWidget(hint)
 
@@ -634,10 +724,8 @@ class PayDialog(QWidget):
         scan_hint.setStyleSheet("color: #a0a0a0; font-size: %dpx; background: transparent;" % font_md)
         right_lay.addWidget(scan_hint)
 
-        self._amount_label = QLabel("￥0.00")
-        self._amount_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._amount_label.setStyleSheet(
-            "color: #00d9ff; font-size: %dpx; font-weight: bold; background: transparent;" % font_price)
+        # 使用顶部我们定义好的丝滑跳动数字组件
+        self._amount_label = AnimatedPriceLabel(zoom=z)
         right_lay.addWidget(self._amount_label)
 
         qr_size = wsc(190, z)
@@ -743,151 +831,23 @@ class PayDialog(QWidget):
 
     # ──────────── 缩放相关 ────────────
 
-    def _get_edge(self, pos):
-        edge = 0
-        margin = 8
-        w, h = self.width(), self.height()
-        if pos.x() < margin:
-            edge |= 1
-        elif pos.x() > w - margin:
-            edge |= 2
-        if pos.y() < margin:
-            edge |= 4
-        elif pos.y() > h - margin:
-            edge |= 8
-        return edge
-
-    def _edge_cursor(self, edge):
-        cursors = {
-            1: Qt.CursorShape.SizeHorCursor,
-            2: Qt.CursorShape.SizeHorCursor,
-            4: Qt.CursorShape.SizeVerCursor,
-            8: Qt.CursorShape.SizeVerCursor,
-            5: Qt.CursorShape.SizeFDiagCursor,
-            10: Qt.CursorShape.SizeFDiagCursor,
-            6: Qt.CursorShape.SizeBDiagCursor,
-            9: Qt.CursorShape.SizeBDiagCursor,
-        }
-        return cursors.get(edge, Qt.CursorShape.ArrowCursor)
-
+        # ──────────── 极简丝滑拖拽逻辑 ────────────
     def mousePressEvent(self, event):
+        # 只要鼠标左键按下，就记录当前位置与窗口左上角的偏移量
         if event.button() == Qt.MouseButton.LeftButton:
-            edge = self._get_edge(event.pos())
-            if edge:
-                self._resize_edge = edge
-                self._resize_start_geo = self.geometry()
-                self._resize_start_pos = event.globalPosition().toPoint()
-            else:
-                self._drag_pos = event.globalPosition().toPoint() - self.frameGeometry().topLeft()
+            self._drag_pos = event.globalPosition().toPoint() - self.frameGeometry().topLeft()
+        super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event):
-        if self._resize_edge and self._resize_start_geo:
-            delta = event.globalPosition().toPoint() - self._resize_start_pos
-            geo = QRect(self._resize_start_geo)
-
-            if self._resize_edge & 1:
-                geo.setLeft(geo.left() + delta.x())
-            if self._resize_edge & 2:
-                geo.setRight(geo.right() + delta.x())
-            if self._resize_edge & 4:
-                geo.setTop(geo.top() + delta.y())
-            if self._resize_edge & 8:
-                geo.setBottom(geo.bottom() + delta.y())
-
-            new_w = geo.width()
-            new_h = int(new_w * _PAY_BASE_H / _PAY_BASE_W)
-            if self._resize_edge & 8:
-                geo.setBottom(geo.top() + new_h)
-            else:
-                geo.setTop(geo.bottom() - new_h)
-
-            min_w, min_h = int(sc(_PAY_BASE_W) * 0.5), int(sc(_PAY_BASE_H) * 0.5)
-            max_w, max_h = sc(_PAY_BASE_W), sc(_PAY_BASE_H)
-            new_w = max(min_w, min(max_w, geo.width()))
-            new_h = int(new_w * _PAY_BASE_H / _PAY_BASE_W)
-            new_h = max(min_h, min(max_h, new_h))
-            new_w = int(new_h * _PAY_BASE_W / _PAY_BASE_H)
-
-            if self._resize_edge & 1:
-                right = geo.right()
-                geo.setWidth(new_w)
-                geo.moveRight(right)
-            else:
-                geo.setWidth(new_w)
-
-            if self._resize_edge & 4:
-                bottom = geo.bottom()
-                geo.setHeight(new_h)
-                geo.moveBottom(bottom)
-            else:
-                geo.setHeight(new_h)
-
-            self.setGeometry(geo)
-        elif self._drag_pos and event.buttons() & Qt.MouseButton.LeftButton:
+        # 如果鼠标左键按住并且在移动，直接移动整个窗口
+        if hasattr(self, '_drag_pos') and self._drag_pos and event.buttons() & Qt.MouseButton.LeftButton:
             self.move(event.globalPosition().toPoint() - self._drag_pos)
-        else:
-            edge = self._get_edge(event.pos())
-            if edge:
-                self.setCursor(self._edge_cursor(edge))
-            else:
-                self.setCursor(Qt.CursorShape.ArrowCursor)
+        super().mouseMoveEvent(event)
 
     def mouseReleaseEvent(self, event):
-        self._resize_edge = 0
-        self._resize_start_geo = None
-        self._resize_start_pos = None
+        # 鼠标松开，清空偏移量记录
         self._drag_pos = None
-
-    def resizeEvent(self, event):
-        super().resizeEvent(event)
-        QTimer.singleShot(0, self._enforce_ratio_and_rebuild)
-
-    def _enforce_ratio_and_rebuild(self):
-        w = self.width()
-        h = int(w * _PAY_BASE_H / _PAY_BASE_W)
-        min_w, min_h = int(sc(_PAY_BASE_W) * 0.5), int(sc(_PAY_BASE_H) * 0.5)
-        max_w, max_h = sc(_PAY_BASE_W), sc(_PAY_BASE_H)
-        h = max(min_h, min(max_h, h))
-
-        if self.height() != h:
-            self.resize(w, h)
-            return
-
-        new_zoom = max(0.5, min(1.0, w / sc(_PAY_BASE_W)))
-        if abs(new_zoom - self._zoom) > 0.005:
-            self._zoom = new_zoom
-            self._rebuild_timer.start(50)
-
-    def _do_rebuild(self):
-        self.setUpdatesEnabled(False)
-
-        # 更新 BokehBackground 大小
-        self._main_card.setFixedSize(self.width(), self.height())
-
-        # 清除内容
-        main_layout = self._main_card.layout()
-        if main_layout:
-            while main_layout.count():
-                item = main_layout.takeAt(0)
-                w = item.widget()
-                if w:
-                    w.deleteLater()
-                lay = item.layout()
-                if lay:
-                    while lay.count():
-                        sub = lay.takeAt(0)
-                        if sub.widget():
-                            sub.widget().deleteLater()
-
-        self._build_content(self._zoom)
-        self.setUpdatesEnabled(True)
-
-    def _make_pay_dialog_resizable(self):
-        """将 setFixedSize 改为可缩放范围"""
-        max_w, max_h = sc(_PAY_BASE_W), sc(_PAY_BASE_H)
-        min_w, min_h = int(max_w * 0.5), int(max_h * 0.5)
-        self.setMinimumSize(min_w, min_h)
-        self.setMaximumSize(max_w, max_h)
+        super().mouseReleaseEvent(event)
 
     # ──────────── 以下是完整的核心业务逻辑 ────────────
 
@@ -931,10 +891,10 @@ class PayDialog(QWidget):
             self._plans_layout.addWidget(card)
 
         default_card = None
-        if len(self._plans) > 1:
-            default_card = self._plans_layout.itemAt(1).widget()
-        elif self._plans_layout.count() > 0:
-            default_card = self._plans_layout.itemAt(0).widget()
+        # 【修改】：直接获取布局里的最后一个组件作为默认选中
+        count = self._plans_layout.count()
+        if count > 0:
+            default_card = self._plans_layout.itemAt(count - 1).widget()
 
         if default_card:
             self.select_plan(default_card)
@@ -950,17 +910,19 @@ class PayDialog(QWidget):
         return cards
 
     def select_plan(self, card: PlanCard):
+        """点击套餐卡片时，瞬间切换选中状态，并尝试显示缓存的二维码"""
         self._poll_timer.stop()
+        self._selected_plan = card.plan_data
+
+        # 瞬间更新左侧卡片的选中视觉效果
         for w in self._get_all_cards():
             w.set_selected(w == card)
-        self._selected_plan = card.plan_data if card else None
 
-        if self._selected_plan:
-            plan_id = self._selected_plan.get("id")
-            if plan_id in self._qr_cache:
-                self._show_cached(plan_id)
-            else:
-                self._create_single_order()
+        plan_id = self._selected_plan.get("id")
+
+        # 尝试显示当前选中的套餐二维码（如果没有缓存，_show_cached 内部会处理显示 Loading）
+        # 传入 animate=True 让价格丝滑跳动
+        self._show_cached(plan_id, animate=True)
 
     def _make_qr_pixmap(self, url: str):
         qr = qrcode.QRCode(version=1, box_size=8, border=2)
@@ -973,23 +935,51 @@ class PayDialog(QWidget):
                                                 Qt.TransformationMode.SmoothTransformation)
 
     def _preload_all_orders(self):
+        # 【核心修复】：开启后台专属线程去拉取微信订单，绝对不阻塞拖拽和动画！
+        import threading
+        threading.Thread(target=self._preload_thread, daemon=True).start()
+
+    def _preload_thread(self):
         machine_code = get_machine_code()
-        for plan in self._plans:
+
+        # 【核心策略修改】：加上 reversed()，让它从后往前加载！
+        # 这样就能和上面默认选中最后一个套餐的逻辑完美对齐，秒出二维码！
+        for plan in reversed(self._plans):
             plan_id = plan.get("id")
+            # 如果缓存里已经有了，就跳过
             if not plan_id or plan_id in self._qr_cache:
                 continue
-            result = api_client.create_order(plan_id, machine_code)
-            if result and "order_no" in result:
-                code_url = result.get("code_url", "")
-                self._qr_cache[plan_id] = {
-                    "pixmap": self._make_qr_pixmap(code_url) if code_url else None,
-                    "order_no": result["order_no"],
-                    "amount": result.get("amount", plan.get("price", "0")),
-                }
+
+            try:
+                # 这里的网络请求会在后台默默进行
+                result = api_client.create_order(plan_id, machine_code)
+                if result and "order_no" in result:
+                    # 把套餐原本的价格塞进去备用
+                    result['fallback_amount'] = plan.get("price", "0")
+
+                    # 拿到一个，就立刻打包这“一个”发射给主界面！
+                    self.qr_preload_done.emit([(plan_id, result)])
+            except Exception:
+                pass
+
+    def _on_preload_done(self, results):
+        for plan_id, result in results:
+            code_url = result.get("code_url", "")
+            amount = result.get("amount", result.get("fallback_amount", "0"))
+
+            # 生成二维码图像并存入缓存
+            self._qr_cache[plan_id] = {
+                "pixmap": self._make_qr_pixmap(code_url) if code_url else None,
+                "order_no": result["order_no"],
+                "amount": amount,
+            }
+
+        # 如果预加载完成时，用户正好看的就是这个套餐，顺便刷新一下显示
         if self._selected_plan:
             pid = self._selected_plan.get("id")
             if pid in self._qr_cache:
-                self._show_cached(pid)
+                # 传入 animate=False 防止数字乱跳
+                self._show_cached(pid, animate=False)
 
     def _create_single_order(self):
         if not self._selected_plan or self._creating:
@@ -1035,29 +1025,58 @@ class PayDialog(QWidget):
 
         self._creating = False
 
-    def _show_cached(self, plan_id, z=None):
+    def _show_cached(self, plan_id, z=None, animate=True):
+        """显示指定套餐的支付信息，如果未加载完则显示 Loading 状态"""
         if z is None:
             z = self._zoom
-        cache = self._qr_cache[plan_id]
-        self._order_no = cache["order_no"]
 
-        if cache["pixmap"]:
+        # 1. 如果二维码还没加载完（后台线程还在跑）
+        if plan_id not in self._qr_cache:
+            # 清空二维码，显示优雅的 Loading 提示
+            self._qr_label.setPixmap(QPixmap())
+            self._qr_label.setText("正在生成专属支付码...")
+            self._qr_label.setStyleSheet(
+                "background-color: rgba(255,255,255,0.05); border-radius: 6px; color: #00d9ff; font-size: %dpx; outline: none;" % wsc(
+                    14, z))
+
+            self._order_hint.setText("加载中...")
+            self._status_label.setText("")
+
+            # 从原始计划数据中读取价格，先行展示价格
+            try:
+                amount_val = float(self._selected_plan.get("price", "0"))
+            except:
+                amount_val = 0.0
+            self._amount_label.set_price(amount_val, animate=animate)
+
+            # 【！！！最关键的一行！！！】
+            # 必须用 return 结束函数，绝对不能让它继续往下走去读取空缓存！
+            return
+
+        # 2. 如果二维码已经加载完毕，从缓存中取出数据并展示
+        cache = self._qr_cache[plan_id]
+        self._order_no = cache.get("order_no", "")
+
+        if cache.get("pixmap"):
             self._qr_label.setPixmap(cache["pixmap"])
-            self._qr_label.setStyleSheet("background-color: #ffffff; border-radius: 6px;")
+            self._qr_label.setStyleSheet("background-color: #ffffff; border-radius: 6px; outline: none;")
         else:
             self._qr_label.setPixmap(QPixmap())
-            self._qr_label.setText("二维码不可用")
+            self._qr_label.setText("二维码生成失败")
             self._qr_label.setStyleSheet(
-                "background-color: #0f3460; border-radius: 6px; color: #a0a0a0; font-size: %dpx;" % wsc(13, z))
+                "background-color: #0f3460; border-radius: 6px; color: #a0a0a0; font-size: %dpx; outline: none;" % wsc(
+                    13, z))
 
         try:
-            amount = "{:.2f}".format(float(cache["amount"]))
+            amount_val = float(cache.get("amount", 0))
         except:
-            amount = cache["amount"]
+            amount_val = 0.0
 
-        self._amount_label.setText("￥{}".format(amount))
+        self._amount_label.set_price(amount_val, animate=animate)
         self._order_hint.setText("订单号: {}  等待支付...".format(self._order_no))
         self._status_label.setText("")
+
+        # 只有真正显示了二维码，才开始轮询支付状态
         self._poll_timer.start(3000)
 
     def _poll_order(self):

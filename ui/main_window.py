@@ -349,20 +349,34 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.setWindowTitle("录屏王")
 
+        # 1. 保持底层物理最大尺寸不变 (670x1260)，方便有大屏幕的用户往上拉伸
         self._max_w = sc(_BASE_W)
         self._max_h = sc(_BASE_H)
         self._min_w = int(self._max_w * 0.5)
         self._min_h = int(self._max_h * 0.5)
+
         self.setMinimumSize(self._min_w, self._min_h)
         self.setMaximumSize(self._max_w, self._max_h)
-        self.resize(self._max_w, self._max_h)
+
+        # 2. 【核心修改】：将启动时的默认高度缩到 900，并等比算出宽度
+        default_h = sc(900)
+        default_w = int(default_h * (_BASE_W / _BASE_H))
+
+        # 确保算出来的值没有越界
+        default_h = max(self._min_h, min(self._max_h, default_h))
+        default_w = max(self._min_w, min(self._max_w, default_w))
+
+        # 3. 以 900 高度启动窗口！
+        self.resize(default_w, default_h)
 
         self.setWindowFlags(Qt.WindowType.FramelessWindowHint)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.setMouseTracking(True)
 
         self._drag_pos = None
-        self._zoom = 1.0
+
+        # 4. 【核心修改】：程序启动时自动计算缩小比例（约 0.71），这样内部的所有组件、字体都会随之变小！
+        self._zoom = default_w / self._max_w
 
         # 状态保存
         self._current_info_text = "选择录制模式后点击开始"
@@ -902,13 +916,15 @@ class MainWindow(QMainWindow):
                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
             )
             if reply == QMessageBox.StandardButton.Yes:
+                self.hide()  # 【核心修复】：先瞬间隐藏主窗口，眼不见为净！
                 self._stop_record()
-                self.recorder.close()
+                self.recorder.close()  # 后台慢慢释放资源，用户完全感觉不到卡顿
                 event.accept()
             else:
                 event.ignore()
         else:
-            self.recorder.close()
+            self.hide()  # 【核心修复】：先瞬间隐藏主窗口！
+            self.recorder.close()  # 这里卡住 1 秒也没关系，因为界面已经秒退了
             event.accept()
 
     def keyPressEvent(self, event):
