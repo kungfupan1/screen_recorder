@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-支付对话框 - 顶级 UI 终极版 (暗黑深空光斑 + 果冻卡片 + 纯净毛玻璃)
+支付对话框 - 顶级 UI 终极版 (暗黑深空光斑 + 果冻卡片 + 纯净毛玻璃 + 窗口等比缩放)
 """
 import qrcode
 import random
@@ -27,16 +27,12 @@ from license.machine_code import get_machine_code
 from license.activation import activate_with_code
 from license import api_client
 from license.cache_manager import save_plans_cache
-from utils.config import sc
+from utils.config import sc, wsc
 
-DIALOG_W = sc(760)
-DIALOG_H = sc(740)
+# 设计稿基准尺寸
+_PAY_BASE_W = 760
+_PAY_BASE_H = 740
 
-FONT_XS = sc(12)
-FONT_SM = sc(13)
-FONT_MD = sc(15)
-FONT_LG = sc(18)
-FONT_PRICE = sc(36)
 
 # ────────── 会员服务协议 ──────────
 AGREEMENT_HTML = """
@@ -84,7 +80,6 @@ AGREEMENT_HTML = """
 """
 
 
-# ────────────────── 动态失焦光斑背景底层 (深邃宇宙版) ──────────────────
 # ────────────────── 动态失焦光斑背景底层 ──────────────────
 class BokehBackground(QWidget):
     """纯代码渲染的动态失焦光斑背景"""
@@ -94,8 +89,7 @@ class BokehBackground(QWidget):
         self.setStyleSheet("background-color: #1a1a2e; border-radius: 12px;")
 
         self._particles = []
-        self._num_particles = 3  # ✨ 恢复为 6 个
-        # ✨ 恢复为更明亮的透明度
+        self._num_particles = 3
         self._colors = [
             QColor(0, 217, 255, 40),
             QColor(138, 43, 226, 30),
@@ -108,13 +102,12 @@ class BokehBackground(QWidget):
         self._timer.start(33)
         self._initialized = False
 
-    def _init_particles(self):
+    def _init_particles(self, zoom=1.0):
         w, h = self.width(), self.height()
         if w == 0 or h == 0: return
         self._particles.clear()
         for _ in range(self._num_particles):
-            # ✨ 恢复原本适中的大小
-            radius = random.randint(sc(80), sc(220))
+            radius = random.randint(wsc(80, zoom), wsc(220, zoom))
             x, y = random.randint(0, w), random.randint(0, h)
             vx, vy = random.uniform(-0.5, 0.5), random.uniform(-0.5, 0.5)
             color = random.choice(self._colors)
@@ -147,17 +140,19 @@ class BokehBackground(QWidget):
             edge_color = QColor(center_color)
             edge_color.setAlpha(0)
             gradient.setColorAt(0, center_color)
-            # ✨ 恢复原本 0.7 才开始模糊的设定，让光斑中心更实一点
             gradient.setColorAt(0.7, center_color)
             gradient.setColorAt(1, edge_color)
             painter.setBrush(gradient)
             painter.drawEllipse(int(p['x'] - p['radius']), int(p['y'] - p['radius']), int(p['radius'] * 2), int(p['radius'] * 2))
+
+
 # ────────────────── 方案卡片 (Apple Dock 泡泡动效版) ──────────────────
 class PlanCard(QWidget):
     """方案卡片 - 果冻呼吸动效"""
 
-    def __init__(self, plan_data: dict, parent=None):
+    def __init__(self, plan_data: dict, zoom=1.0, parent=None):
         super().__init__(parent)
+        self._zoom = zoom
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self.plan_data = plan_data
         self.selected = False
@@ -185,9 +180,10 @@ class PlanCard(QWidget):
             "PlanCard { background-color: rgba(255, 255, 255, 0.04); border: 2px solid transparent; border-radius: 8px; }")
 
     def _build_ui(self):
+        z = self._zoom
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(sc(16), sc(10), sc(16), sc(10))
-        layout.setSpacing(sc(4))
+        layout.setContentsMargins(wsc(16, z), wsc(10, z), wsc(16, z), wsc(10, z))
+        layout.setSpacing(wsc(4, z))
 
         days = self.plan_data.get("duration_days", 0)
         try:
@@ -213,7 +209,7 @@ class PlanCard(QWidget):
         layout.addStretch()
 
         right_vbox = QVBoxLayout()
-        right_vbox.setSpacing(sc(2))
+        right_vbox.setSpacing(wsc(2, z))
         right_vbox.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
 
         price_val = self.plan_data.get("price", "0")
@@ -253,20 +249,21 @@ class PlanCard(QWidget):
             badge.move(0, 0)
 
     def _on_anim_step(self, v: float):
+        z = self._zoom
         # 高度：58(常态) -> 72(选中)
-        h = int(sc(58) + sc(14) * v)
+        h = int(wsc(58, z) + wsc(14, z) * v)
         self.setFixedHeight(h)
-        name_sz = int(sc(12) + sc(3) * v)
-        price_sz = int(sc(19) + sc(5) * v)
+        name_sz = int(wsc(12, z) + wsc(3, z) * v)
+        price_sz = int(wsc(19, z) + wsc(5, z) * v)
         self._name_lbl.setStyleSheet(
             f"color: #ffffff; font-size: {name_sz}px; font-weight: bold; background: transparent;")
         self._price_lbl.setStyleSheet(
             f"color: #ffffff; font-size: {price_sz}px; font-weight: bold; background: transparent;")
         if hasattr(self, '_dur_lbl'):
-            dur_sz = int(sc(10) + sc(3) * v)
+            dur_sz = int(wsc(10, z) + wsc(3, z) * v)
             self._dur_lbl.setStyleSheet(f"color: #999999; font-size: {dur_sz}px; background: transparent;")
-        m_lr = int(sc(16) + sc(4) * v)
-        m_tb = int(sc(8) + sc(2) * v)
+        m_lr = int(wsc(16, z) + wsc(4, z) * v)
+        m_tb = int(wsc(8, z) + wsc(2, z) * v)
         self.layout().setContentsMargins(m_lr, m_tb, m_lr, m_tb)
 
     def set_selected(self, sel: bool):
@@ -301,14 +298,17 @@ class PlanCard(QWidget):
 
 # ────────────────── 会员协议弹窗 ──────────────────
 class AgreementDialog(QWidget):
-    def __init__(self, parent=None):
+    def __init__(self, zoom=1.0, parent=None):
         super().__init__(parent)
+        z = zoom
         self.setWindowFlags(Qt.WindowType.FramelessWindowHint | Qt.WindowType.Dialog)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self._drag_pos = None
-        w, h = sc(520), sc(540)
+        w, h = wsc(520, z), wsc(540, z)
         self.setFixedSize(w, h)
+
+        font_md = wsc(15, z)
 
         self.setObjectName("agreeCard")
         self.setStyleSheet("QWidget#agreeCard { background-color: #1a1a2e; border-radius: 10px; }")
@@ -318,17 +318,17 @@ class AgreementDialog(QWidget):
         outer.setSpacing(0)
 
         tb = QFrame()
-        tb.setFixedHeight(sc(40))
+        tb.setFixedHeight(wsc(40, z))
         tb.setStyleSheet(
             "QFrame { background-color: #16213e; border-top-left-radius: 10px; border-top-right-radius: 10px; }")
         tbl = QHBoxLayout(tb)
-        tbl.setContentsMargins(sc(16), 0, sc(10), 0)
+        tbl.setContentsMargins(wsc(16, z), 0, wsc(10, z), 0)
         tt = QLabel("会员服务协议")
-        tt.setStyleSheet("color: #ffffff; font-size: %dpx; font-weight: bold; background: transparent;" % FONT_MD)
+        tt.setStyleSheet("color: #ffffff; font-size: %dpx; font-weight: bold; background: transparent;" % font_md)
         tbl.addWidget(tt)
         tbl.addStretch()
         cb = TransparentToolButton(FIF.CLOSE, self)
-        cb.setFixedSize(sc(34), sc(34))
+        cb.setFixedSize(wsc(34, z), wsc(34, z))
         cb.clicked.connect(self.close)
         tbl.addWidget(cb)
         outer.addWidget(tb)
@@ -360,18 +360,23 @@ class AgreementDialog(QWidget):
 class RedeemDialog(QWidget):
     activate_success = Signal()
 
-    def __init__(self, parent=None):
+    def __init__(self, zoom=1.0, parent=None):
         super().__init__(parent)
+        z = zoom
         self.setWindowFlags(Qt.WindowType.FramelessWindowHint | Qt.WindowType.Dialog)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self._drag_pos = None
-        w, h = sc(460), sc(210)
+
+        font_xs = wsc(12, z)
+        font_sm = wsc(13, z)
+        font_md = wsc(15, z)
+
+        w, h = wsc(460, z), wsc(210, z)
         self.setFixedSize(w, h)
 
         self._bg_frame = QFrame(self)
         self._bg_frame.setGeometry(0, 0, w, h)
         self._bg_frame.setObjectName("RedeemBg")
-        # ✨ 修改：使用纯实心颜色 #1a1a2e，告别底层透明
         self._bg_frame.setStyleSheet(
             "QFrame#RedeemBg { background-color: #1a1a2e; border-radius: 12px; border: 1px solid rgba(255, 255, 255, 0.08); }")
         outer = QVBoxLayout(self._bg_frame)
@@ -379,16 +384,16 @@ class RedeemDialog(QWidget):
         outer.setSpacing(0)
 
         tb = QFrame()
-        tb.setFixedHeight(sc(40))
+        tb.setFixedHeight(wsc(40, z))
         tb.setStyleSheet("background: transparent;")
         tbl = QHBoxLayout(tb)
-        tbl.setContentsMargins(sc(16), 0, sc(10), 0)
+        tbl.setContentsMargins(wsc(16, z), 0, wsc(10, z), 0)
         tt = QLabel("兑换码激活")
-        tt.setStyleSheet("color: #ffffff; font-size: %dpx; font-weight: bold; background: transparent;" % FONT_MD)
+        tt.setStyleSheet("color: #ffffff; font-size: %dpx; font-weight: bold; background: transparent;" % font_md)
         tbl.addWidget(tt)
         tbl.addStretch()
         cb = TransparentToolButton(FIF.CLOSE, self)
-        cb.setFixedSize(sc(34), sc(34))
+        cb.setFixedSize(wsc(34, z), wsc(34, z))
         cb.clicked.connect(self.close)
         tbl.addWidget(cb)
         outer.addWidget(tb)
@@ -396,54 +401,54 @@ class RedeemDialog(QWidget):
         body = QWidget()
         body.setStyleSheet("background: transparent;")
         bl = QVBoxLayout(body)
-        bl.setContentsMargins(sc(24), sc(10), sc(24), sc(20))
-        bl.setSpacing(sc(14))
+        bl.setContentsMargins(wsc(24, z), wsc(10, z), wsc(24, z), wsc(20, z))
+        bl.setSpacing(wsc(14, z))
 
         mc_row = QHBoxLayout()
-        mc_row.setSpacing(sc(10))
+        mc_row.setSpacing(wsc(10, z))
         mc_lbl = QLabel("设备特征码:")
-        mc_lbl.setStyleSheet("color: #888888; font-size: %dpx; background: transparent;" % FONT_SM)
+        mc_lbl.setStyleSheet("color: #888888; font-size: %dpx; background: transparent;" % font_sm)
         mc_row.addWidget(mc_lbl)
 
         machine_code = get_machine_code()
         mc_text = QLabel(machine_code)
         mc_text.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         mc_text.setStyleSheet(
-            "color: #00d9ff; font-size: %dpx; font-family: Consolas; background: transparent;" % FONT_SM)
+            "color: #00d9ff; font-size: %dpx; font-family: Consolas; background: transparent;" % font_sm)
         mc_row.addWidget(mc_text)
 
         mc_row.addStretch()
         cp_btn = QPushButton("复制")
-        cp_btn.setFixedSize(sc(56), sc(28))
+        cp_btn.setFixedSize(wsc(56, z), wsc(28, z))
         cp_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         cp_btn.setStyleSheet(
-            "QPushButton { background-color: rgba(255,255,255,0.05); color: #aaaaaa; border: 1px solid rgba(255,255,255,0.1); border-radius: 4px; padding: 0px; font-size: %dpx; } QPushButton:hover { background-color: rgba(255,255,255,0.1); color: #ffffff; }" % FONT_XS)
+            "QPushButton { background-color: rgba(255,255,255,0.05); color: #aaaaaa; border: 1px solid rgba(255,255,255,0.1); border-radius: 4px; padding: 0px; font-size: %dpx; } QPushButton:hover { background-color: rgba(255,255,255,0.1); color: #ffffff; }" % font_xs)
         cp_btn.clicked.connect(lambda: QApplication.clipboard().setText(machine_code))
         mc_row.addWidget(cp_btn)
         bl.addLayout(mc_row)
 
         cd_row = QHBoxLayout()
-        cd_row.setSpacing(sc(10))
+        cd_row.setSpacing(wsc(10, z))
 
         self._code_input = QLineEdit()
         self._code_input.setPlaceholderText("请输入 REC- 开头的激活码...")
-        self._code_input.setFixedHeight(sc(36))
+        self._code_input.setFixedHeight(wsc(36, z))
         self._code_input.setStyleSheet(
             "QLineEdit { background-color: rgba(0, 0, 0, 0.2); color: #ffffff; border: 1px solid rgba(255, 255, 255, 0.1); border-radius: 6px; padding: 0 %dpx; font-size: %dpx; } QLineEdit:focus { border-color: #00d9ff; background-color: rgba(0, 217, 255, 0.05); }" % (
-            sc(10), FONT_SM))
+            wsc(10, z), font_sm))
         cd_row.addWidget(self._code_input)
 
         act_btn = QPushButton("立即激活")
-        act_btn.setFixedSize(sc(84), sc(36))
+        act_btn.setFixedSize(wsc(84, z), wsc(36, z))
         act_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         act_btn.setStyleSheet(
-            "QPushButton { background-color: #00d9ff; color: #111111; border: none; border-radius: 6px; padding: 0px; font-weight: bold; font-size: %dpx; } QPushButton:hover { background-color: #33e5ff; }" % FONT_SM)
+            "QPushButton { background-color: #00d9ff; color: #111111; border: none; border-radius: 6px; padding: 0px; font-weight: bold; font-size: %dpx; } QPushButton:hover { background-color: #33e5ff; }" % font_sm)
         act_btn.clicked.connect(self._do_activate)
         cd_row.addWidget(act_btn)
         bl.addLayout(cd_row)
 
         self._msg = QLabel("")
-        self._msg.setStyleSheet("color: #e94560; font-size: %dpx; background: transparent;" % FONT_SM)
+        self._msg.setStyleSheet("color: #e94560; font-size: %dpx; background: transparent;" % font_sm)
         bl.addWidget(self._msg)
         outer.addWidget(body)
 
@@ -452,6 +457,7 @@ class RedeemDialog(QWidget):
             self.move(pg.x() + (pg.width() - w) // 2, pg.y() + (pg.height() - h) // 2)
 
     def _do_activate(self):
+        font_sm = wsc(13, 1.0)  # msg 样式不需要 zoom
         code = self._code_input.text().strip()
         if not code:
             self._msg.setText("请输入激活码")
@@ -459,7 +465,7 @@ class RedeemDialog(QWidget):
         res = activate_with_code(code)
         if res["success"]:
             self._msg.setText("✅ 激活成功！")
-            self._msg.setStyleSheet("color: #00d9ff; font-size: %dpx; background: transparent;" % FONT_SM)
+            self._msg.setStyleSheet("color: #00d9ff; font-size: %dpx; background: transparent;" % font_sm)
             QTimer.singleShot(800, lambda: [self.close(), self.activate_success.emit()])
         else:
             self._msg.setText(f"❌ {res['message']}")
@@ -483,8 +489,19 @@ class PayDialog(QWidget):
         super().__init__(parent)
         self.setWindowFlags(Qt.WindowType.FramelessWindowHint | Qt.WindowType.Dialog)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
-        self.setFixedSize(DIALOG_W, DIALOG_H)
+
+        max_w, max_h = sc(_PAY_BASE_W), sc(_PAY_BASE_H)
+        min_w, min_h = int(max_w * 0.5), int(max_h * 0.5)
+        self.setMinimumSize(min_w, min_h)
+        self.setMaximumSize(max_w, max_h)
+        self.resize(max_w, max_h)
+
+        self.setMouseTracking(True)
         self._drag_pos = None
+        self._resize_edge = 0
+        self._resize_start_geo = None
+        self._resize_start_pos = None
+        self._zoom = 1.0
 
         self._plans = []
         self._selected_plan = None
@@ -493,6 +510,11 @@ class PayDialog(QWidget):
         self._poll_timer = QTimer(self)
         self._poll_timer.timeout.connect(self._poll_order)
         self._creating = False
+
+        # 防抖定时器
+        self._rebuild_timer = QTimer(self)
+        self._rebuild_timer.setSingleShot(True)
+        self._rebuild_timer.timeout.connect(self._do_rebuild)
 
         setTheme(Theme.DARK)
         setThemeColor("#00d9ff")
@@ -506,7 +528,7 @@ class PayDialog(QWidget):
     def _build_ui(self):
         # 启用光斑底板
         self._main_card = BokehBackground(self)
-        self._main_card.setFixedSize(DIALOG_W, DIALOG_H)
+        self._main_card.setFixedSize(sc(_PAY_BASE_W), sc(_PAY_BASE_H))
 
         shadow = QGraphicsDropShadowEffect(self._main_card)
         shadow.setBlurRadius(30)
@@ -514,20 +536,31 @@ class PayDialog(QWidget):
         shadow.setOffset(0, 4)
         self._main_card.setGraphicsEffect(shadow)
 
+        self._build_content(self._zoom)
+
+    def _build_content(self, zoom):
+        """根据 zoom 构建 BokehBackground 内的全部内容"""
+        z = zoom
+        font_xs = wsc(12, z)
+        font_sm = wsc(13, z)
+        font_md = wsc(15, z)
+        font_lg = wsc(18, z)
+        font_price = wsc(36, z)
+
         main_layout = QVBoxLayout(self._main_card)
         main_layout.setContentsMargins(0, 0, 0, 0)
         main_layout.setSpacing(0)
 
         # === 标题栏 ===
         title_bar = QFrame()
-        title_bar.setFixedHeight(sc(46))
+        title_bar.setFixedHeight(wsc(46, z))
         title_bar.setStyleSheet("background: transparent;")
         tbl = QHBoxLayout(title_bar)
-        tbl.setContentsMargins(sc(20), 0, sc(10), 0)
+        tbl.setContentsMargins(wsc(20, z), 0, wsc(10, z), 0)
 
         title_text = QLabel("激活录屏王")
         title_text.setStyleSheet(
-            "color: #ffffff; font-size: %dpx; font-weight: bold; background: transparent;" % FONT_LG)
+            "color: #ffffff; font-size: %dpx; font-weight: bold; background: transparent;" % font_lg)
         tbl.addWidget(title_text)
         tbl.addStretch()
 
@@ -536,12 +569,12 @@ class PayDialog(QWidget):
 
         # 放大菜单字体
         menu_font = QFont("Microsoft YaHei")
-        menu_font.setPixelSize(sc(24))
+        menu_font.setPixelSize(wsc(24, z))
         self._more_menu.setFont(menu_font)
 
         redeem_action = Action(FIF.TAG, "兑换码激活", triggered=self._open_redeem)
         self._more_menu.addAction(redeem_action)
-        btn_sz = sc(44)
+        btn_sz = wsc(44, z)
         self._more_btn.setFixedSize(btn_sz, btn_sz)
         self._more_btn.clicked.connect(lambda: self._more_menu.exec(
             self._more_btn.mapToGlobal(self._more_btn.rect().bottomRight() - QPoint(0, 0))))
@@ -557,32 +590,32 @@ class PayDialog(QWidget):
         body = QWidget()
         body.setStyleSheet("background: transparent;")
         body_layout = QHBoxLayout(body)
-        body_layout.setContentsMargins(sc(20), sc(14), sc(20), sc(14))
-        body_layout.setSpacing(sc(20))
+        body_layout.setContentsMargins(wsc(20, z), wsc(14, z), wsc(20, z), wsc(14, z))
+        body_layout.setSpacing(wsc(20, z))
 
         # ──── 左栏 ────
         left = QWidget()
         left.setStyleSheet("background: transparent;")
         left_lay = QVBoxLayout(left)
         left_lay.setContentsMargins(0, 0, 0, 0)
-        left_lay.setSpacing(sc(6))
+        left_lay.setSpacing(wsc(6, z))
 
         hint = QLabel("选择授权方案")
-        hint.setStyleSheet("color: #a0a0a0; font-size: %dpx; font-weight: bold; background: transparent;" % FONT_MD)
+        hint.setStyleSheet("color: #a0a0a0; font-size: %dpx; font-weight: bold; background: transparent;" % font_md)
         left_lay.addWidget(hint)
 
         self._plans_layout = QVBoxLayout()
-        self._plans_layout.setSpacing(sc(12))
+        self._plans_layout.setSpacing(wsc(12, z))
         left_lay.addLayout(self._plans_layout)
 
         self._loading_label = QLabel("正在加载方案...")
-        self._loading_label.setStyleSheet("color: #a0a0a0; font-size: %dpx; background: transparent;" % FONT_MD)
+        self._loading_label.setStyleSheet("color: #a0a0a0; font-size: %dpx; background: transparent;" % font_md)
         left_lay.addWidget(self._loading_label)
         left_lay.addStretch()
 
         self._status_label = QLabel("")
         self._status_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._status_label.setStyleSheet("color: #a0a0a0; font-size: %dpx; background: transparent;" % FONT_SM)
+        self._status_label.setStyleSheet("color: #a0a0a0; font-size: %dpx; background: transparent;" % font_sm)
         left_lay.addWidget(self._status_label)
         body_layout.addWidget(left, stretch=4)
 
@@ -592,38 +625,38 @@ class PayDialog(QWidget):
         right.setStyleSheet(
             "QFrame#RightPanel { background-color: rgba(255, 255, 255, 0.03); border-radius: 10px; border: 1px solid rgba(255, 255, 255, 0.06); }")
         right_lay = QVBoxLayout(right)
-        right_lay.setContentsMargins(sc(16), sc(24), sc(16), sc(20))
-        right_lay.setSpacing(sc(10))
+        right_lay.setContentsMargins(wsc(16, z), wsc(24, z), wsc(16, z), wsc(20, z))
+        right_lay.setSpacing(wsc(10, z))
         right_lay.addStretch(1)
 
         scan_hint = QLabel("微信扫码支付")
         scan_hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        scan_hint.setStyleSheet("color: #a0a0a0; font-size: %dpx; background: transparent;" % FONT_MD)
+        scan_hint.setStyleSheet("color: #a0a0a0; font-size: %dpx; background: transparent;" % font_md)
         right_lay.addWidget(scan_hint)
 
         self._amount_label = QLabel("￥0.00")
         self._amount_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._amount_label.setStyleSheet(
-            "color: #00d9ff; font-size: %dpx; font-weight: bold; background: transparent;" % FONT_PRICE)
+            "color: #00d9ff; font-size: %dpx; font-weight: bold; background: transparent;" % font_price)
         right_lay.addWidget(self._amount_label)
 
-        qr_size = sc(190)
+        qr_size = wsc(190, z)
         self._qr_label = QLabel("选择方案后生成二维码")
         self._qr_label.setFixedSize(qr_size, qr_size)
         self._qr_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._qr_label.setStyleSheet(
-            "background-color: rgba(255,255,255,0.05); border-radius: 6px; color: #a0a0a0; font-size: %dpx;" % FONT_SM)
+            "background-color: rgba(255,255,255,0.05); border-radius: 6px; color: #a0a0a0; font-size: %dpx;" % font_sm)
         right_lay.addWidget(self._qr_label, alignment=Qt.AlignmentFlag.AlignCenter)
-        right_lay.addSpacing(sc(14))
+        right_lay.addSpacing(wsc(14, z))
 
         self._order_hint = QLabel("")
         self._order_hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._order_hint.setStyleSheet("color: #777777; font-size: %dpx; background: transparent;" % FONT_XS)
+        self._order_hint.setStyleSheet("color: #777777; font-size: %dpx; background: transparent;" % font_xs)
         right_lay.addWidget(self._order_hint)
-        right_lay.addSpacing(sc(4))
+        right_lay.addSpacing(wsc(4, z))
 
         agree_label = QLabel(
-            "<a href='#' style='color: #00d9ff; text-decoration: none; font-size: %dpx;'>《会员服务协议》</a>" % FONT_SM)
+            "<a href='#' style='color: #00d9ff; text-decoration: none; font-size: %dpx;'>《会员服务协议》</a>" % font_sm)
         agree_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         agree_label.setStyleSheet("background: transparent;")
         agree_label.linkActivated.connect(self._open_agreement)
@@ -637,17 +670,17 @@ class PayDialog(QWidget):
         bottom = QWidget()
         bottom.setStyleSheet("background: transparent;")
         bottom_lay = QVBoxLayout(bottom)
-        bottom_lay.setContentsMargins(sc(20), 0, sc(20), sc(12))
-        bottom_lay.setSpacing(sc(8))
+        bottom_lay.setContentsMargins(wsc(20, z), 0, wsc(20, z), wsc(12, z))
+        bottom_lay.setSpacing(wsc(8, z))
 
         perks_title = QLabel("录屏会员核心特权")
         perks_title.setStyleSheet(
-            "color: #a0a0a0; font-size: %dpx; font-weight: bold; background: transparent;" % FONT_MD)
+            "color: #a0a0a0; font-size: %dpx; font-weight: bold; background: transparent;" % font_md)
         bottom_lay.addWidget(perks_title)
 
         perks_layout = QHBoxLayout()
         perks_layout.setContentsMargins(0, 0, 0, 0)
-        perks_layout.setSpacing(sc(16))
+        perks_layout.setSpacing(wsc(16, z))
         perk_data = [
             ("🎬", "不限时长录制", "高清录制不间断"),
             ("🎥", "原画/高帧率", "24~60帧极致高清"),
@@ -659,20 +692,20 @@ class PayDialog(QWidget):
             box.setStyleSheet(
                 "QFrame#PerkBox { background-color: rgba(255, 255, 255, 0.04); border-radius: 8px; border: 1px solid rgba(255, 255, 255, 0.06); }")
             col = QVBoxLayout(box)
-            col.setContentsMargins(sc(10), sc(14), sc(10), sc(14))
-            col.setSpacing(sc(4))
+            col.setContentsMargins(wsc(10, z), wsc(14, z), wsc(10, z), wsc(14, z))
+            col.setSpacing(wsc(4, z))
             icon = QLabel(icon_text)
             icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            icon.setStyleSheet("color: #ffffff; font-size: %dpx; background: transparent; border: none;" % sc(28))
+            icon.setStyleSheet("color: #ffffff; font-size: %dpx; background: transparent; border: none;" % wsc(28, z))
             col.addWidget(icon)
             t = QLabel(title)
             t.setAlignment(Qt.AlignmentFlag.AlignCenter)
             t.setStyleSheet(
-                "color: #00d9ff; font-size: %dpx; font-weight: bold; background: transparent; border: none;" % FONT_MD)
+                "color: #00d9ff; font-size: %dpx; font-weight: bold; background: transparent; border: none;" % font_md)
             col.addWidget(t)
             s = QLabel(subtitle)
             s.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            s.setStyleSheet("color: #888888; font-size: %dpx; background: transparent; border: none;" % FONT_XS)
+            s.setStyleSheet("color: #888888; font-size: %dpx; background: transparent; border: none;" % font_xs)
             col.addWidget(s)
             perks_layout.addWidget(box)
         bottom_lay.addLayout(perks_layout)
@@ -680,22 +713,181 @@ class PayDialog(QWidget):
         svc_row = QHBoxLayout()
         svc_row.addStretch()
         svc = QLabel("客服微信: 13450445253")
-        svc.setStyleSheet("color: #555555; font-size: %dpx; background: transparent;" % FONT_XS)
+        svc.setStyleSheet("color: #555555; font-size: %dpx; background: transparent;" % font_xs)
         svc_row.addWidget(svc)
         cp = QPushButton("复制")
-        cp.setFixedSize(sc(40), sc(22))
+        cp.setFixedSize(wsc(40, z), wsc(22, z))
         cp.setCursor(Qt.CursorShape.PointingHandCursor)
         cp.setStyleSheet(
-            "QPushButton { background-color: #0f3460; color: #00d9ff; border: none; border-radius: 3px; padding: 0px; font-family: 'Microsoft YaHei'; font-size: %dpx; } QPushButton:hover { background-color: #00d9ff; color: #1a1a2e; }" % FONT_XS)
+            "QPushButton { background-color: #0f3460; color: #00d9ff; border: none; border-radius: 3px; padding: 0px; font-family: 'Microsoft YaHei'; font-size: %dpx; } QPushButton:hover { background-color: #00d9ff; color: #1a1a2e; }" % font_xs)
         cp.clicked.connect(lambda: QApplication.clipboard().setText("13450445253"))
         svc_row.addWidget(cp)
         bottom_lay.addLayout(svc_row)
 
         main_layout.addWidget(bottom)
 
+        # 从 self._plans 重建方案列表
+        if self._plans:
+            self._render_plans_content(z)
+
+        # 从 self._qr_cache 恢复选中方案的二维码
+        if self._selected_plan:
+            pid = self._selected_plan.get("id")
+            if pid in self._qr_cache:
+                self._show_cached(pid, z)
+
         if self.parent():
             pg = self.parent().geometry()
-            self.move(pg.x() + (pg.width() - DIALOG_W) // 2, pg.y() + (pg.height() - DIALOG_H) // 2)
+            self.move(pg.x() + (pg.width() - self.width()) // 2,
+                      pg.y() + (pg.height() - self.height()) // 2)
+
+    # ──────────── 缩放相关 ────────────
+
+    def _get_edge(self, pos):
+        edge = 0
+        margin = 8
+        w, h = self.width(), self.height()
+        if pos.x() < margin:
+            edge |= 1
+        elif pos.x() > w - margin:
+            edge |= 2
+        if pos.y() < margin:
+            edge |= 4
+        elif pos.y() > h - margin:
+            edge |= 8
+        return edge
+
+    def _edge_cursor(self, edge):
+        cursors = {
+            1: Qt.CursorShape.SizeHorCursor,
+            2: Qt.CursorShape.SizeHorCursor,
+            4: Qt.CursorShape.SizeVerCursor,
+            8: Qt.CursorShape.SizeVerCursor,
+            5: Qt.CursorShape.SizeFDiagCursor,
+            10: Qt.CursorShape.SizeFDiagCursor,
+            6: Qt.CursorShape.SizeBDiagCursor,
+            9: Qt.CursorShape.SizeBDiagCursor,
+        }
+        return cursors.get(edge, Qt.CursorShape.ArrowCursor)
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            edge = self._get_edge(event.pos())
+            if edge:
+                self._resize_edge = edge
+                self._resize_start_geo = self.geometry()
+                self._resize_start_pos = event.globalPosition().toPoint()
+            else:
+                self._drag_pos = event.globalPosition().toPoint() - self.frameGeometry().topLeft()
+
+    def mouseMoveEvent(self, event):
+        if self._resize_edge and self._resize_start_geo:
+            delta = event.globalPosition().toPoint() - self._resize_start_pos
+            geo = QRect(self._resize_start_geo)
+
+            if self._resize_edge & 1:
+                geo.setLeft(geo.left() + delta.x())
+            if self._resize_edge & 2:
+                geo.setRight(geo.right() + delta.x())
+            if self._resize_edge & 4:
+                geo.setTop(geo.top() + delta.y())
+            if self._resize_edge & 8:
+                geo.setBottom(geo.bottom() + delta.y())
+
+            new_w = geo.width()
+            new_h = int(new_w * _PAY_BASE_H / _PAY_BASE_W)
+            if self._resize_edge & 8:
+                geo.setBottom(geo.top() + new_h)
+            else:
+                geo.setTop(geo.bottom() - new_h)
+
+            min_w, min_h = int(sc(_PAY_BASE_W) * 0.5), int(sc(_PAY_BASE_H) * 0.5)
+            max_w, max_h = sc(_PAY_BASE_W), sc(_PAY_BASE_H)
+            new_w = max(min_w, min(max_w, geo.width()))
+            new_h = int(new_w * _PAY_BASE_H / _PAY_BASE_W)
+            new_h = max(min_h, min(max_h, new_h))
+            new_w = int(new_h * _PAY_BASE_W / _PAY_BASE_H)
+
+            if self._resize_edge & 1:
+                right = geo.right()
+                geo.setWidth(new_w)
+                geo.moveRight(right)
+            else:
+                geo.setWidth(new_w)
+
+            if self._resize_edge & 4:
+                bottom = geo.bottom()
+                geo.setHeight(new_h)
+                geo.moveBottom(bottom)
+            else:
+                geo.setHeight(new_h)
+
+            self.setGeometry(geo)
+        elif self._drag_pos and event.buttons() & Qt.MouseButton.LeftButton:
+            self.move(event.globalPosition().toPoint() - self._drag_pos)
+        else:
+            edge = self._get_edge(event.pos())
+            if edge:
+                self.setCursor(self._edge_cursor(edge))
+            else:
+                self.setCursor(Qt.CursorShape.ArrowCursor)
+
+    def mouseReleaseEvent(self, event):
+        self._resize_edge = 0
+        self._resize_start_geo = None
+        self._resize_start_pos = None
+        self._drag_pos = None
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        QTimer.singleShot(0, self._enforce_ratio_and_rebuild)
+
+    def _enforce_ratio_and_rebuild(self):
+        w = self.width()
+        h = int(w * _PAY_BASE_H / _PAY_BASE_W)
+        min_w, min_h = int(sc(_PAY_BASE_W) * 0.5), int(sc(_PAY_BASE_H) * 0.5)
+        max_w, max_h = sc(_PAY_BASE_W), sc(_PAY_BASE_H)
+        h = max(min_h, min(max_h, h))
+
+        if self.height() != h:
+            self.resize(w, h)
+            return
+
+        new_zoom = max(0.5, min(1.0, w / sc(_PAY_BASE_W)))
+        if abs(new_zoom - self._zoom) > 0.005:
+            self._zoom = new_zoom
+            self._rebuild_timer.start(50)
+
+    def _do_rebuild(self):
+        self.setUpdatesEnabled(False)
+
+        # 更新 BokehBackground 大小
+        self._main_card.setFixedSize(self.width(), self.height())
+
+        # 清除内容
+        main_layout = self._main_card.layout()
+        if main_layout:
+            while main_layout.count():
+                item = main_layout.takeAt(0)
+                w = item.widget()
+                if w:
+                    w.deleteLater()
+                lay = item.layout()
+                if lay:
+                    while lay.count():
+                        sub = lay.takeAt(0)
+                        if sub.widget():
+                            sub.widget().deleteLater()
+
+        self._build_content(self._zoom)
+        self.setUpdatesEnabled(True)
+
+    def _make_pay_dialog_resizable(self):
+        """将 setFixedSize 改为可缩放范围"""
+        max_w, max_h = sc(_PAY_BASE_W), sc(_PAY_BASE_H)
+        min_w, min_h = int(max_w * 0.5), int(max_h * 0.5)
+        self.setMinimumSize(min_w, min_h)
+        self.setMaximumSize(max_w, max_h)
 
     # ──────────── 以下是完整的核心业务逻辑 ────────────
 
@@ -708,19 +900,25 @@ class PayDialog(QWidget):
         if plans:
             self._public_key = public_key
             save_plans_cache(plans, public_key)
-            self._render_plans(plans)
+            self._plans = plans
+            self._render_plans()
         else:
             from license.cache_manager import load_plans_cache as load_cache
             cached_plans, cached_key = load_cache()
             if cached_plans:
                 self._public_key = cached_key
-                self._render_plans(cached_plans)
+                self._plans = cached_plans
+                self._render_plans()
             else:
                 self._loading_label.setText("无法连接服务器，请检查网络")
-                self._loading_label.setStyleSheet("color: #e94560; font-size: %dpx; background: transparent;" % FONT_MD)
+                self._loading_label.setStyleSheet("color: #e94560; font-size: %dpx; background: transparent;" % wsc(15, self._zoom))
 
-    def _render_plans(self, plans):
-        self._plans = plans
+    def _render_plans(self):
+        self._loading_label.setVisible(False)
+        self._render_plans_content(self._zoom)
+
+    def _render_plans_content(self, z):
+        """渲染方案卡片（可被 rebuild 调用）"""
         self._loading_label.setVisible(False)
 
         while self._plans_layout.count():
@@ -728,12 +926,12 @@ class PayDialog(QWidget):
             if item.widget():
                 item.widget().deleteLater()
 
-        for p in plans:
-            card = PlanCard(p, self)
+        for p in self._plans:
+            card = PlanCard(p, zoom=z, parent=self)
             self._plans_layout.addWidget(card)
 
         default_card = None
-        if len(plans) > 1:
+        if len(self._plans) > 1:
             default_card = self._plans_layout.itemAt(1).widget()
         elif self._plans_layout.count() > 0:
             default_card = self._plans_layout.itemAt(0).widget()
@@ -770,7 +968,7 @@ class PayDialog(QWidget):
         qr.make(fit=True)
         img = qr.make_image(fill_color="black", back_color="white").convert("RGB")
         qimage = QImage(img.tobytes("raw", "RGB"), img.width, img.height, 3 * img.width, QImage.Format.Format_RGB888)
-        qr_img_size = sc(190)
+        qr_img_size = wsc(190, self._zoom)
         return QPixmap.fromImage(qimage).scaled(qr_img_size, qr_img_size, Qt.AspectRatioMode.KeepAspectRatio,
                                                 Qt.TransformationMode.SmoothTransformation)
 
@@ -805,7 +1003,7 @@ class PayDialog(QWidget):
 
         if not result or "order_no" not in result:
             self._status_label.setText("创建订单失败，请重试")
-            self._status_label.setStyleSheet("color: #e94560; font-size: %dpx; background: transparent;" % FONT_SM)
+            self._status_label.setStyleSheet("color: #e94560; font-size: %dpx; background: transparent;" % wsc(13, self._zoom))
             self._creating = False
             return
 
@@ -833,11 +1031,13 @@ class PayDialog(QWidget):
             self._poll_timer.start(3000)
         else:
             self._status_label.setText("未获取到支付链接")
-            self._status_label.setStyleSheet("color: #e94560; font-size: %dpx; background: transparent;" % FONT_SM)
+            self._status_label.setStyleSheet("color: #e94560; font-size: %dpx; background: transparent;" % wsc(13, self._zoom))
 
         self._creating = False
 
-    def _show_cached(self, plan_id):
+    def _show_cached(self, plan_id, z=None):
+        if z is None:
+            z = self._zoom
         cache = self._qr_cache[plan_id]
         self._order_no = cache["order_no"]
 
@@ -848,7 +1048,7 @@ class PayDialog(QWidget):
             self._qr_label.setPixmap(QPixmap())
             self._qr_label.setText("二维码不可用")
             self._qr_label.setStyleSheet(
-                "background-color: #0f3460; border-radius: 6px; color: #a0a0a0; font-size: %dpx;" % FONT_SM)
+                "background-color: #0f3460; border-radius: 6px; color: #a0a0a0; font-size: %dpx;" % wsc(13, z))
 
         try:
             amount = "{:.2f}".format(float(cache["amount"]))
@@ -871,47 +1071,36 @@ class PayDialog(QWidget):
                 if act["success"]:
                     self._status_label.setText("支付成功！")
                     self._status_label.setStyleSheet(
-                        "color: #00d9ff; font-size: %dpx; background: transparent;" % FONT_SM)
+                        "color: #00d9ff; font-size: %dpx; background: transparent;" % wsc(13, self._zoom))
                     QTimer.singleShot(800, self._on_success)
                 else:
                     self._status_label.setText("激活失败: {}".format(act["message"]))
                     self._status_label.setStyleSheet(
-                        "color: #e94560; font-size: %dpx; background: transparent;" % FONT_SM)
+                        "color: #e94560; font-size: %dpx; background: transparent;" % wsc(13, self._zoom))
             else:
                 self._status_label.setText("支付成功，但未获取到许可证")
-                self._status_label.setStyleSheet("color: #e94560; font-size: %dpx; background: transparent;" % FONT_SM)
+                self._status_label.setStyleSheet("color: #e94560; font-size: %dpx; background: transparent;" % wsc(13, self._zoom))
         elif result.get("status") == "expired":
             self._poll_timer.stop()
             self._status_label.setText("订单已过期，请重新选择")
-            self._status_label.setStyleSheet("color: #e94560; font-size: %dpx; background: transparent;" % FONT_SM)
+            self._status_label.setStyleSheet("color: #e94560; font-size: %dpx; background: transparent;" % wsc(13, self._zoom))
             self._qr_label.setPixmap(QPixmap())
             self._qr_label.setText("选择方案后生成二维码")
             self._qr_label.setStyleSheet(
-                "background-color: rgba(255,255,255,0.05); border-radius: 6px; color: #a0a0a0; font-size: %dpx;" % FONT_SM)
+                "background-color: rgba(255,255,255,0.05); border-radius: 6px; color: #a0a0a0; font-size: %dpx;" % wsc(13, self._zoom))
 
     def _open_redeem(self):
-        dlg = RedeemDialog(self)
+        dlg = RedeemDialog(zoom=self._zoom, parent=self)
         dlg.activate_success.connect(self._on_success)
         dlg.show()
 
     def _open_agreement(self):
-        dlg = AgreementDialog(self)
+        dlg = AgreementDialog(zoom=self._zoom, parent=self)
         dlg.show()
 
     def _on_success(self):
         self.close()
         self.payment_success.emit()
-
-    def mousePressEvent(self, event):
-        if event.button() == Qt.MouseButton.LeftButton:
-            self._drag_pos = event.globalPosition().toPoint() - self.frameGeometry().topLeft()
-
-    def mouseMoveEvent(self, event):
-        if self._drag_pos and event.buttons() & Qt.MouseButton.LeftButton:
-            self.move(event.globalPosition().toPoint() - self._drag_pos)
-
-    def mouseReleaseEvent(self, event):
-        self._drag_pos = None
 
     def closeEvent(self, event):
         self._poll_timer.stop()

@@ -10,6 +10,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **Key dependencies**: PySide6, PySide6-Fluent-Widgets (imported as `qfluentwidgets`), mss (screen capture), opencv-python (video encoding), cryptography (license verification), qrcode (QR code generation), requests (API calls)
 
+**No test suite** — only `test_coords.py` (coordinate debug utility). No unit tests exist.
+
 ## Commands
 
 ```bash
@@ -43,10 +45,10 @@ recorder/
   screen_capture.py     # UNUSED - dead code
   video_writer.py       # UNUSED - dead code
 ui/
-  main_window.py        # MainWindow, VideoCard, MonitorSelector - main application UI
-  pay_dialog.py         # PayDialog - payment/license activation dialog (QR code + redeem code)
-  widgets.py            # Custom widgets: TitleBar (frameless window), StatusIndicator (colored dot)
-  styles.py             # UNUSED - legacy color scheme/stylesheets from before qfluentwidgets refactor
+  main_window.py        # MainWindow, VideoCard, MonitorSelector, BokehBackground - main application UI
+  pay_dialog.py         # PayDialog, PlanCard, AgreementDialog, RedeemDialog, BokehBackground (duplicate)
+  widgets.py            # Custom widgets: TitleBar, RecordButton, ModeButton, StatusIndicator, TimeDisplay
+  styles.py             # Color constants (COLORS dict) + stylesheet templates used by widgets.py
 license/
   activation.py         # Entry point: check_activation() + activate_with_code() — startup check + offline verify
   verifier.py           # Ed25519 offline license verification (REC-{Base64URL(78 bytes)} format)
@@ -54,10 +56,14 @@ license/
   cache_manager.py      # Local JSON cache at %LOCALAPPDATA%\录屏王\ (license.json, plans_cache.json)
   api_client.py         # JustPay API client (fetch plans, create order, poll order status, verify online)
 utils/
-  config.py             # Config class with DEFAULT_CONFIG (fps=30, output_dir, format) + get_resource_path()
+  config.py             # sc() DPI scaling function, Config class, DEFAULT_CONFIG, get_resource_path()
 ```
 
 ## Key Technical Details
+
+### DPI Scaling (`sc()` function)
+
+`utils/config.py` defines `_get_dpi_scale()` which reads system DPI via Win32 API, computes `UI_SCALE = max(dpi / 96.0, 1.0)`. The `sc(size)` function scales any pixel value by this factor. **Every UI file** uses `sc()` for all dimensions — fonts, spacing, widget sizes. The app disables Qt's built-in scaling (`QT_AUTO_SCREEN_SCALE_FACTOR=0`, `QT_ENABLE_HIGHDPI_SCALING=0`) and handles it manually via `sc()`.
 
 ### Recording Pipeline (controller.py)
 
@@ -101,9 +107,11 @@ Pause/resume at the `ScreenRecorder` level tracks pause duration to adjust `star
 ### UI Framework
 
 - Uses `qfluentwidgets` (from `PySide6-Fluent-Widgets` package) for modern Fluent Design components
-- Dark theme set globally via `setTheme(Theme.DARK)` and `setThemeColor("#70c0e8")`
+- Dark theme set globally via `setTheme(Theme.DARK)` and `setThemeColor("#00d9ff")`
 - Frameless window with custom `TitleBar` widget for drag/minimize/close
-- All styling is done inline via `setStyleSheet()` — `styles.py` is legacy and not imported
+- Styling is a mix: `ui/styles.py` provides color constants (`COLORS` dict) and stylesheet templates imported by `widgets.py`; `main_window.py` and `pay_dialog.py` add additional inline styles via `setStyleSheet()`
+- `BokehBackground` (animated light-spot background) is **duplicated** in both `main_window.py` and `pay_dialog.py` with slightly different parameters — changes to one won't affect the other
+- `setTheme(Theme.DARK)` in `PayDialog.__init__()` injects global CSS that can override child widget styling — use object name selectors and explicit `background: transparent` on containers to prevent cascade issues
 
 ### Build/Packaging
 
@@ -119,10 +127,12 @@ Pause/resume at the `ScreenRecorder` level tracks pause duration to adjust `star
 1. **Never share mss instance across threads** — causes `_thread._local object has no attribute 'srcdc'` error. Each `_capture_worker` creates its own `with mss.mss() as sct:`
 2. **Frame rate drift** — use `time.perf_counter()` based timing, never simple `sleep(1/fps)`
 3. **Odd dimensions** — OpenCV VideoWriter requires even width/height
-4. **DPI scaling** — Windows scaling causes coordinate mismatch; the app disables Qt scaling and uses physical coordinates
-5. **Dead code** — `recorder/screen_capture.py`, `recorder/video_writer.py`, and `ui/styles.py` are unused; keep them out of refactor scope
+4. **DPI scaling** — Windows scaling causes coordinate mismatch; the app disables Qt scaling and uses physical coordinates. Always use `sc()` for pixel values in UI code.
+5. **Dead code** — `recorder/screen_capture.py` and `recorder/video_writer.py` are unused; keep them out of refactor scope. (`ui/styles.py` IS used by `widgets.py` — do not delete it.)
 6. **PyInstaller hidden imports** — license modules (`license.*`), `qrcode`, and `cryptography` must be listed in `hiddenimports` in the spec file or they won't be bundled
 7. **Pause doesn't actually pause recording** — see "Pause bug" in UI/Controller Communication section
+8. **qfluentwidgets `setTheme(Theme.DARK)` cascading** — calling this injects global CSS that can make child widgets invisible (e.g. black text on black background). Diagnose from the top-level window down; use `background: transparent` on intermediate containers and object-name selectors to override.
+9. **BokehBackground duplication** — exists in both `main_window.py` and `pay_dialog.py`. Fixes to one must be manually applied to the other.
 
 ## License/Payment System
 

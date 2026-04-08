@@ -44,6 +44,11 @@ def sc(size):
     return int(size * UI_SCALE)
 
 
+def wsc(size, zoom):
+    """Window-scaled size: DPI scale * zoom factor"""
+    return max(1, int(size * UI_SCALE * zoom))
+
+
 # 默认配置
 DEFAULT_CONFIG = {
     "fps": 30,
