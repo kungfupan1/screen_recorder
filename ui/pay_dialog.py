@@ -653,8 +653,6 @@ class PayDialog(QWidget):
         tbl.addWidget(self.vip_days_label)
 
         self._more_btn = TransparentToolButton(FIF.MORE, self)
-
-        self._more_btn = TransparentToolButton(FIF.MORE, self)
         self._more_menu = RoundMenu(parent=self)
 
         # 放大菜单字体
