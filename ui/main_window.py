@@ -13,7 +13,7 @@ from PySide6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QLabel,
     QPushButton, QFrame, QScrollArea, QFileDialog, QCheckBox, QMessageBox, QMenu
 )
-from PySide6.QtCore import Qt, QTimer, QPoint, QPointF, QRect
+from PySide6.QtCore import Qt, QTimer, QPoint, QPointF, QRect, Signal
 from PySide6.QtGui import QPixmap, QImage, QColor, QPainter, QRadialGradient, QPen, QBrush
 
 import cv2
@@ -384,6 +384,7 @@ class MonitorSelector(QFrame):
 # ────────────────── 主窗口 ──────────────────
 class MainWindow(QMainWindow):
     """主窗口 - 系统级等比缩放"""
+    _video_ready = Signal(str)  # 线程安全：后台合并完成后通知主线程
 
     def __init__(self):
         super().__init__()
@@ -434,7 +435,7 @@ class MainWindow(QMainWindow):
 
         self.recorder = RecordController(user_videos)
         self.recorder.on_status_changed = self._on_status
-        self.recorder.on_recording_complete = self._on_complete
+        self.recorder.on_recording_complete = self._on_complete_threadsafe
         self.record_mode = "fullscreen"
 
         self.timer = QTimer(self)
@@ -442,6 +443,8 @@ class MainWindow(QMainWindow):
         self.elapsed = 0
 
         self._video_paths = []
+
+        self._video_ready.connect(self._on_complete)
 
         self._setup_ui()
 
@@ -910,7 +913,13 @@ class MainWindow(QMainWindow):
         self.monitor_selector.setEnabled(True)
 
         self._update_status("idle", "就绪")
-        self.info_label.setText("录制完成，共 {} 个视频".format(len(paths)))
+
+        # 如果有音频需要合并，显示提示 (合并会在后台线程执行)
+        has_audio = (self.mic_check.isChecked() or self.sys_check.isChecked())
+        if has_audio:
+            self.info_label.setText("正在合并音视频，请稍候...")
+        else:
+            self.info_label.setText("录制完成，共 {} 个视频".format(len(paths)))
         self._current_info_text = self.info_label.text()
         self.time_display.set_time(0)
 
@@ -958,14 +967,21 @@ class MainWindow(QMainWindow):
         """实时切换麦克风/系统声音静音"""
         cap = getattr(self.recorder, '_audio_capture', None)
         if cap:
-            cap.mic_muted = not self.mic_check.isChecked()
-            cap.sys_muted = not self.sys_check.isChecked()
+            cap.set_mute("mic", not self.mic_check.isChecked())
+            cap.set_mute("sys", not self.sys_check.isChecked())
+
+    def _on_complete_threadsafe(self, path):
+        """后台线程调用 → 通过信号转发到主线程"""
+        self._video_ready.emit(path)
 
     def _on_complete(self, path):
         if os.path.exists(path):
             self._video_paths.append(path)
             card = VideoCard(path, zoom=self._zoom)
             self.video_layout.insertWidget(self.video_layout.count() - 1, card)
+            # 合并完成后更新提示文字
+            self.info_label.setText("录制完成，共 {} 个视频".format(len(self._video_paths)))
+            self._current_info_text = self.info_label.text()
 
     def _on_close(self):
         self.close()

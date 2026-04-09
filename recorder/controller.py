@@ -210,13 +210,12 @@ class RecordController:
             if not self.recorders:
                 raise RuntimeError("没有有效的录制目标")
 
-            # 启动音频采集
+            # 启动音频采集 (多轨独立录制)
             self._audio_capture = None
             if self.record_mic or self.record_system:
-                from recorder.audio_capture import AudioCapture
-                audio_path = os.path.join(self.output_dir, f"audio_{timestamp}.wav")
+                from recorder.audio import AudioCapture
                 self._audio_capture = AudioCapture(
-                    audio_path,
+                    self.output_dir,
                     record_mic=self.record_mic,
                     record_system=self.record_system
                 )
@@ -271,10 +270,10 @@ class RecordController:
         if not self.is_recording:
             return []
 
-        # 1. 停止音频采集
-        audio_path = None
+        # 1. 停止音频采集 (返回 {"mic": "path", "sys": "path"} 字典)
+        audio_paths = {}
         if self._audio_capture:
-            audio_path = self._audio_capture.stop()
+            audio_paths = self._audio_capture.stop()
             self._audio_capture = None
 
         # 2. 停止视频录制
@@ -286,37 +285,47 @@ class RecordController:
         self.is_paused = False
 
         output_paths = [r.output_path for r in self.recorders]
-
-        # 3. 合并音频到视频
-        if audio_path and os.path.exists(audio_path):
-            from recorder.audio_capture import merge_audio_video
-            merged = []
-            for vp in output_paths:
-                base, ext = os.path.splitext(vp)
-                final_path = base + "_merged" + ext
-                result = merge_audio_video(vp, audio_path, final_path)
-                if result == final_path and os.path.exists(final_path):
-                    try:
-                        os.remove(vp)
-                    except:
-                        pass
-                    merged.append(final_path)
-                else:
-                    merged.append(vp)
-            output_paths = merged
-            try:
-                os.remove(audio_path)
-            except:
-                pass
+        self.recorders = []
 
         if self.on_status_changed:
             self.on_status_changed("stopped")
 
-        for path in output_paths:
-            if self.on_recording_complete and os.path.exists(path):
-                self.on_recording_complete(path)
+        # 3. 合并音频到视频 (在后台线程执行，不阻塞 UI)
+        if audio_paths:
+            def _do_merge(paths, apaths):
+                from recorder.audio import merge_tracks
+                merged = []
+                for vp in paths:
+                    base, ext = os.path.splitext(vp)
+                    final_path = base + "_merged" + ext
+                    result = merge_tracks(vp, apaths, final_path)
+                    if result == final_path and os.path.exists(final_path):
+                        try:
+                            os.remove(vp)
+                        except:
+                            pass
+                        merged.append(final_path)
+                    else:
+                        merged.append(vp)
+                # 清理临时音频文件
+                for name, ap in apaths.items():
+                    try:
+                        os.remove(ap)
+                    except:
+                        pass
+                # 合并完成后，通知 UI
+                for path in merged:
+                    if self.on_recording_complete and os.path.exists(path):
+                        self.on_recording_complete(path)
+                print(f"[合并完成] {len(merged)} 个视频已合并 {len(apaths)} 条音轨")
 
-        self.recorders = []
+            threading.Thread(target=_do_merge, args=(output_paths, audio_paths), daemon=True).start()
+        else:
+            # 无音频，直接回调
+            for path in output_paths:
+                if self.on_recording_complete and os.path.exists(path):
+                    self.on_recording_complete(path)
+
         return output_paths
 
     def get_duration(self):
