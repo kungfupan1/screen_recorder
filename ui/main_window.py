@@ -199,55 +199,68 @@ class BokehBackground(QWidget):
             painter.drawEllipse(int(x - radius), int(y - radius), int(radius * 2), int(radius * 2))
 # ────────────────── 视频卡片 ──────────────────
 class VideoCard(QFrame):
-    """视频卡片"""
+    """视频卡片 - 手动定位，悬停向上放大，不影响邻居"""
 
     def __init__(self, video_path, zoom=1.0, parent=None):
         super().__init__(parent)
         self.video_path = video_path
         self._zoom = zoom
+        self._base_w = wsc(160, zoom)
+        self._base_h = wsc(120, zoom)
+        self._base_x = 0
+        self._base_y = 0
         self.setObjectName("videoCard")
         self._apply_size()
         self.setStyleSheet("""
             #videoCard { background-color: rgba(255, 255, 255, 0.04); border-radius: 12px; border: 1px solid rgba(255, 255, 255, 0.06); }
-            #videoCard:hover { border-color: #00d9ff; background-color: rgba(0, 217, 255, 0.05); }
+            #videoCard:hover { border-color: #00d9ff; background-color: rgba(0, 217, 255, 0.08); }
         """)
 
         layout = QVBoxLayout(self)
         self._layout = layout
-        layout.setContentsMargins(wsc(10, zoom), wsc(10, zoom), wsc(10, zoom), wsc(10, zoom))
-        layout.setSpacing(wsc(6, zoom))
+        layout.setContentsMargins(wsc(8, zoom), wsc(8, zoom), wsc(8, zoom), wsc(8, zoom))
+        layout.setSpacing(0)
 
         self.thumb = QLabel()
-        self.thumb.setFixedSize(wsc(140, zoom), wsc(75, zoom))
+        self.thumb.setFixedSize(wsc(144, zoom), wsc(104, zoom))
         self.thumb.setStyleSheet("background-color: rgba(0, 0, 0, 0.3); border-radius: 6px;")
         self.thumb.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.thumb.setText("📹")
         layout.addWidget(self.thumb)
 
-        name = os.path.basename(video_path)
-        if len(name) > 22:
-            name = name[:19] + "..."
-        self.name_label = QLabel(name)
-        self.name_label.setStyleSheet("color: #ffffff; font-size: {}px; background: transparent;".format(wsc(18, zoom)))
-        self.name_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        layout.addWidget(self.name_label)
-
         self._set_duration()
         QTimer.singleShot(100, self._generate_thumb)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
 
+    def enterEvent(self, event):
+        """鼠标进入 → 原地向上放大，不挤压邻居"""
+        super().enterEvent(event)
+        self.raise_()
+        scale = 1.15
+        new_w = int(self._base_w * scale)
+        new_h = int(self._base_h * scale)
+        # 底部对齐，向上放大
+        new_x = self._base_x - (new_w - self._base_w) // 2
+        new_y = self._base_y + self._base_h - new_h
+        self.setGeometry(new_x, new_y, new_w, new_h)
+
+    def leaveEvent(self, event):
+        """鼠标离开 → 恢复原始位置和大小"""
+        super().leaveEvent(event)
+        self.setGeometry(self._base_x, self._base_y, self._base_w, self._base_h)
+
     def _apply_size(self):
         z = self._zoom
-        self.setFixedSize(wsc(160, z), wsc(130, z))
+        self._base_w = wsc(160, z)
+        self._base_h = wsc(120, z)
+        self.setFixedSize(self._base_w, self._base_h)
 
     def update_zoom(self, zoom):
         self._zoom = zoom
-        z = zoom
         self._apply_size()
-        self._layout.setContentsMargins(wsc(10, z), wsc(10, z), wsc(10, z), wsc(10, z))
-        self._layout.setSpacing(wsc(6, z))
-        self.thumb.setFixedSize(wsc(140, z), wsc(75, z))
-        self.name_label.setStyleSheet("color: #ffffff; font-size: {}px; background: transparent;".format(wsc(18, z)))
+        z = zoom
+        self._layout.setContentsMargins(wsc(8, z), wsc(8, z), wsc(8, z), wsc(8, z))
+        self.thumb.setFixedSize(wsc(144, z), wsc(104, z))
         self._generate_thumb()
 
     def _set_duration(self):
@@ -276,7 +289,7 @@ class VideoCard(QFrame):
                     if ret:
                         frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
                         h, w = frame.shape[:2]
-                        tw, th = wsc(140, self._zoom), wsc(75, self._zoom)
+                        tw, th = wsc(144, self._zoom), wsc(104, self._zoom)
                         scale = min(tw / w, th / h)
                         nw, nh = int(w * scale), int(h * scale)
                         frame = cv2.resize(frame, (nw, nh))
@@ -542,6 +555,7 @@ class MainWindow(QMainWindow):
     def update_ui_scale(self, zoom):
         """在现有控件上原地更新尺寸/字体，不销毁不重建"""
         z = zoom
+        self._position_video_arrows(z)
 
         # 标题栏
         self._title_bar.update_zoom(z)
@@ -589,22 +603,29 @@ class MainWindow(QMainWindow):
         self._button_layout.setSpacing(wsc(20, z))
 
         # 滚动区
-        self._scroll_area.setFixedHeight(wsc(150, z))
-        self._scroll_area.setStyleSheet("""
-            QScrollArea { background-color: rgba(0, 0, 0, 0.25); border: 1px solid rgba(255, 255, 255, 0.08); border-radius: 12px; }
-            QScrollBar:horizontal { height: %dpx; background: rgba(255, 255, 255, 0.02); border-radius: %dpx; }
-            QScrollBar::handle:horizontal { background: rgba(255, 255, 255, 0.15); border-radius: %dpx; min-width: %dpx; }
-            QScrollBar::handle:horizontal:hover { background: rgba(0, 217, 255, 0.5); }
-        """ % (wsc(10, z), wsc(5, z), wsc(5, z), wsc(30, z)))
+        self._scroll_area.setFixedHeight(wsc(140, z))
+        self._scroll_area.setStyleSheet("QScrollArea { background: transparent; border: none; }")
 
-        self.video_layout.setContentsMargins(wsc(12, z), wsc(12, z), wsc(12, z), wsc(12, z))
-        self.video_layout.setSpacing(wsc(12, z))
+        # 箭头按钮
+        arrow_font = wsc(50, z)
+        arrow_style = """
+            QPushButton { background: transparent; border: none; color: rgba(0, 200, 240, 0.5); font-size: %dpx; padding: 0; }
+            QPushButton:hover { color: #00d9ff; }
+        """ % arrow_font
+        self._left_arrow.setStyleSheet(arrow_style)
+        self._right_arrow.setStyleSheet(arrow_style)
+
+        # 文件夹按钮
+        self._folder_btn.setFixedSize(wsc(36, z), wsc(36, z))
+        self._folder_btn.setStyleSheet("""
+            QPushButton { background: transparent; border: none; color: #a0d8ef; font-size: %dpx; padding: 0; }
+            QPushButton:hover { color: #00d9ff; }
+        """ % wsc(22, z))
 
         # 视频卡片
-        for i in range(self.video_layout.count()):
-            item = self.video_layout.itemAt(i)
-            if item and item.widget() and isinstance(item.widget(), VideoCard):
-                item.widget().update_zoom(z)
+        for card in self._video_cards:
+            card.update_zoom(z)
+        self._layout_video_cards(z)
 
         # 底部提示
         self._bottom_hint.setStyleSheet("color: #808080; font-size: {}px; background: transparent;".format(wsc(20, z)))
@@ -755,35 +776,79 @@ class MainWindow(QMainWindow):
 
         ct.addWidget(self._line())
 
-        # 视频列表
+        # 视频列表标题行：标签 + 文件夹按钮
+        video_header = QHBoxLayout()
+        video_header.setContentsMargins(0, 0, 0, 0)
         self._video_label = QLabel("已录制视频（点击另存为）")
         self._video_label.setStyleSheet("color: #a0a0a0; font-size: {}px; font-weight: bold; background: transparent;".format(wsc(22, z)))
-        ct.addWidget(self._video_label)
+        video_header.addWidget(self._video_label)
+        video_header.addStretch()
+        self._folder_btn = QPushButton("📂")
+        self._folder_btn.setObjectName("iconBtn")
+        self._folder_btn.setFixedSize(wsc(36, z), wsc(36, z))
+        self._folder_btn.setStyleSheet("""
+            QPushButton { background: transparent; border: none; color: #a0d8ef; font-size: %dpx; padding: 0; }
+            QPushButton:hover { color: #00d9ff; }
+        """ % wsc(22, z))
+        self._folder_btn.setToolTip("打开视频目录")
+        self._folder_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._folder_btn.clicked.connect(self._open_video_dir)
+        video_header.addWidget(self._folder_btn)
+        ct.addLayout(video_header)
+
+        # 视频预览区：scroll area + 浮动箭头
+        self._video_wrapper = QWidget()
+        self._video_wrapper.setStyleSheet("background: transparent;")
+        wrapper_layout = QVBoxLayout(self._video_wrapper)
+        wrapper_layout.setContentsMargins(0, 0, 0, 0)
+        wrapper_layout.setSpacing(0)
 
         self._scroll_area = QScrollArea()
         self._scroll_area.setWidgetResizable(True)
-        self._scroll_area.setFixedHeight(wsc(150, z))
-        self._scroll_area.setStyleSheet("""
-            QScrollArea { background-color: rgba(0, 0, 0, 0.25); border: 1px solid rgba(255, 255, 255, 0.08); border-radius: 12px; }
-            QScrollBar:horizontal { height: %dpx; background: rgba(255, 255, 255, 0.02); border-radius: %dpx; }
-            QScrollBar::handle:horizontal { background: rgba(255, 255, 255, 0.15); border-radius: %dpx; min-width: %dpx; }
-            QScrollBar::handle:horizontal:hover { background: rgba(0, 217, 255, 0.5); }
-        """ % (wsc(10, z), wsc(5, z), wsc(5, z), wsc(30, z)))
+        self._scroll_area.setFixedHeight(wsc(140, z))
+        self._scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self._scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self._scroll_area.setStyleSheet("QScrollArea { background: transparent; border: none; }")
+        self._scroll_area.wheelEvent = self._on_video_wheel
 
         self.video_container = QWidget()
         self.video_container.setStyleSheet("background: transparent;")
-        self.video_layout = QHBoxLayout(self.video_container)
-        self.video_layout.setContentsMargins(wsc(12, z), wsc(12, z), wsc(12, z), wsc(12, z))
-        self.video_layout.setSpacing(wsc(12, z))
-        self.video_layout.addStretch()
+        self._video_cards = []
 
-        for path in self._video_paths:
+        for path in reversed(self._video_paths):
             if os.path.exists(path):
                 card_item = VideoCard(path, zoom=z)
-                self.video_layout.insertWidget(self.video_layout.count() - 1, card_item)
+                card_item.setParent(self.video_container)
+                self._video_cards.append(card_item)
+
+        self._layout_video_cards(z)
 
         self._scroll_area.setWidget(self.video_container)
-        ct.addWidget(self._scroll_area)
+        wrapper_layout.addWidget(self._scroll_area)
+
+        # 浮动箭头 (叠加在滚动区上方)
+        arrow_font = wsc(50, z)
+        arrow_style = """
+            QPushButton { background: transparent; border: none; color: rgba(0, 200, 240, 0.5); font-size: %dpx; padding: 0; }
+            QPushButton:hover { color: #00d9ff; }
+        """ % arrow_font
+        self._left_arrow = QPushButton("◂")
+        self._left_arrow.setObjectName("iconBtn")
+        self._left_arrow.setParent(self._video_wrapper)
+        self._left_arrow.setStyleSheet(arrow_style)
+        self._left_arrow.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._left_arrow.clicked.connect(lambda: self._scroll_videos(-1))
+        self._left_arrow.raise_()
+
+        self._right_arrow = QPushButton("▸")
+        self._right_arrow.setObjectName("iconBtn")
+        self._right_arrow.setParent(self._video_wrapper)
+        self._right_arrow.setStyleSheet(arrow_style)
+        self._right_arrow.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._right_arrow.clicked.connect(lambda: self._scroll_videos(1))
+        self._right_arrow.raise_()
+
+        ct.addWidget(self._video_wrapper)
 
         # 底部提示
         self._bottom_hint = QLabel("F9 开始/停止  |  F10 暂停/继续  |  ESC 退出")
@@ -793,6 +858,7 @@ class MainWindow(QMainWindow):
 
         cl.addWidget(content)
         self._apply_styles(z)
+        QTimer.singleShot(0, lambda: self._position_video_arrows(z))
 
 
     def _line(self):
@@ -816,6 +882,8 @@ class MainWindow(QMainWindow):
                 font-weight: bold;
             }
             QPushButton:hover { background-color: rgba(0, 217, 255, 0.2); border-color: #00d9ff; }
+            QPushButton#iconBtn { background: transparent; border: none; padding: 0; font-weight: normal; }
+            QPushButton#iconBtn:hover { background: transparent; border: none; }
             QPushButton:disabled {
                 background-color: rgba(255, 255, 255, 0.08);
                 color: #7a7a9a;
@@ -978,13 +1046,64 @@ class MainWindow(QMainWindow):
         if os.path.exists(path):
             self._video_paths.append(path)
             card = VideoCard(path, zoom=self._zoom)
-            self.video_layout.insertWidget(self.video_layout.count() - 1, card)
+            card.setParent(self.video_container)
+            self._video_cards.insert(0, card)  # newest first
+            self._layout_video_cards()
             # 合并完成后更新提示文字
             self.info_label.setText("录制完成，共 {} 个视频".format(len(self._video_paths)))
             self._current_info_text = self.info_label.text()
 
     def _on_close(self):
         self.close()
+
+    # === 视频预览区辅助方法 ===
+
+    def _open_video_dir(self):
+        """打开视频输出目录"""
+        output_dir = self.recorder.output_dir
+        if os.path.exists(output_dir):
+            os.startfile(output_dir)
+
+    def _layout_video_cards(self, z=None):
+        """手动排列视频卡片（无布局管理器），悬停放大不影响邻居"""
+        if z is None:
+            z = self._zoom
+        spacing = wsc(20, z)
+        margin = wsc(12, z)
+        x = margin
+        max_h = 0
+        for card in self._video_cards:
+            card._base_x = x
+            card._base_y = margin
+            card.setGeometry(x, margin, card._base_w, card._base_h)
+            card.show()
+            x += card._base_w + spacing
+            max_h = max(max_h, card._base_h)
+        self.video_container.setMinimumSize(x + margin - spacing, max_h + 2 * margin)
+
+    def _scroll_videos(self, direction):
+        """箭头点击滚动: direction=-1 左, +1 右"""
+        bar = self._scroll_area.horizontalScrollBar()
+        bar.setValue(bar.value() + direction * wsc(180, self._zoom))
+
+    def _on_video_wheel(self, event):
+        """鼠标滚轮: 上下滚 → 水平滚动"""
+        delta = event.angleDelta().y()
+        bar = self._scroll_area.horizontalScrollBar()
+        bar.setValue(bar.value() - delta)
+
+    def _position_video_arrows(self, z=None):
+        """定位浮动箭头到滚动区左右两端"""
+        if z is None:
+            z = self._zoom
+        w = self._video_wrapper.width()
+        h = self._scroll_area.height()
+        arrow_w = wsc(50, z)
+        y = 0
+        self._left_arrow.setGeometry(0, y, arrow_w, h)
+        self._right_arrow.setGeometry(w - arrow_w, y, arrow_w, h)
+        self._left_arrow.raise_()
+        self._right_arrow.raise_()
 
     # === 拖拽（fallback，nativeEvent 的 HTCAPTION 是主路径）===
     def mousePressEvent(self, event):
