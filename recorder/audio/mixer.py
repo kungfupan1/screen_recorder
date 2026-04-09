@@ -12,6 +12,8 @@
 import os
 import subprocess
 
+from utils.config import get_resource_path
+
 
 def merge_tracks(video_path, audio_paths, output_path):
     """将视频与多条音轨合并
@@ -75,7 +77,7 @@ def _build_ffmpeg_cmd(video_path, audio_paths, output_path):
     audio_list = list(audio_paths.values())
     num_tracks = len(audio_list)
 
-    cmd = ['ffmpeg', '-y', '-i', video_path]
+    cmd = [get_resource_path('ffmpeg'), '-y', '-i', video_path]
 
     for path in audio_list:
         cmd.extend(['-i', path])

@@ -1,7 +1,7 @@
 # -*- mode: python ; coding: utf-8 -*-
 from PyInstaller.utils.hooks import collect_all
 
-datas = []
+datas = [('ffmpeg.exe', '.')]
 binaries = []
 hiddenimports = ['license', 'license.machine_code', 'license.verifier', 'license.cache_manager', 'license.activation', 'license.api_client', 'qrcode', 'cryptography']
 tmp_ret = collect_all('PySide6')
