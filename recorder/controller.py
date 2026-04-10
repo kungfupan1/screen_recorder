@@ -5,7 +5,7 @@
 import threading
 import time
 import mss
-import cv2
+import subprocess
 import os
 from datetime import datetime
 import numpy as np
@@ -14,6 +14,36 @@ from queue import Queue, Empty
 
 class ScreenRecorder:
     """单个屏幕录制器"""
+
+    _cached_encoder = None  # 类变量缓存，只探测一次
+
+    @classmethod
+    def _detect_encoder(cls, ffmpeg_path):
+        """探测可用的 H.264 编码器（只执行一次，结果缓存）"""
+        if cls._cached_encoder is not None:
+            return cls._cached_encoder
+
+        for encoder in ['h264_nvenc', 'h264_amf', 'h264_qsv', 'libopenh264']:
+            try:
+                startupinfo = None
+                if os.name == 'nt':
+                    startupinfo = subprocess.STARTUPINFO()
+                    startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+                result = subprocess.run(
+                    [ffmpeg_path, '-hide_banner', '-loglevel', 'error',
+                     '-f', 'lavfi', '-i', 'nullsrc=s=64x64:d=0.1',
+                     '-c:v', encoder, '-f', 'null', '-'],
+                    stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                    startupinfo=startupinfo, timeout=3
+                )
+                if result.returncode == 0:
+                    cls._cached_encoder = encoder
+                    return encoder
+            except:
+                pass
+
+        cls._cached_encoder = 'mpeg4'
+        return 'mpeg4'
 
     def __init__(self, bounds, output_path, fps=30):
         x, y, w, h = [int(v) for v in bounds]
@@ -24,7 +54,7 @@ class ScreenRecorder:
         self.output_path = output_path
         self.fps = fps
 
-        self.writer = None
+        self._ffmpeg_proc = None
         self.frame_count = 0
         self.queue = Queue(maxsize=120)
         self._stop_event = threading.Event()
@@ -41,15 +71,48 @@ class ScreenRecorder:
         self._pause_event.clear()
 
     def start(self):
-        """初始化并开始录制"""
-        fourcc = cv2.VideoWriter_fourcc(*"mp4v")
-        self.writer = cv2.VideoWriter(
-            self.output_path, fourcc, float(self.fps),
-            (self.width, self.height)
-        )
+        """初始化并开始录制 (FFmpeg pipe, 自动探测编码器)"""
+        from utils.config import get_resource_path
 
-        if not self.writer.isOpened():
-            raise RuntimeError(f"无法创建视频写入器: {self.output_path}")
+        encoder = self._detect_encoder(get_resource_path('ffmpeg'))
+
+        ffmpeg_cmd = [
+            get_resource_path('ffmpeg'),
+            '-y',
+            '-f', 'rawvideo',
+            '-vcodec', 'rawvideo',
+            '-pix_fmt', 'bgr24',
+            '-s', f'{self.width}x{self.height}',
+            '-r', str(self.fps),
+            '-i', '-',
+        ]
+
+        if encoder == 'h264_nvenc':
+            ffmpeg_cmd += ['-c:v', 'h264_nvenc', '-preset', 'p1', '-tune', 'ull', '-cq', '20', '-pix_fmt', 'yuv420p']
+        elif encoder == 'h264_amf':
+            ffmpeg_cmd += ['-c:v', 'h264_amf', '-quality', 'speed', '-rc', 'cqp', '-qp_i', '20', '-qp_p', '20', '-pix_fmt', 'yuv420p']
+        elif encoder == 'h264_qsv':
+            ffmpeg_cmd += ['-c:v', 'h264_qsv', '-preset', 'veryfast', '-global_quality', '20', '-look_ahead', '0']
+        elif encoder == 'libopenh264':
+            ffmpeg_cmd += ['-c:v', 'libopenh264', '-pix_fmt', 'yuv420p']
+        else:
+            # fallback: mpeg4 (跟原 mp4v 相同质量)
+            ffmpeg_cmd += ['-c:v', 'mpeg4', '-q:v', '3']
+
+        ffmpeg_cmd += ['-movflags', '+faststart', self.output_path]
+
+        startupinfo = None
+        if os.name == 'nt':
+            startupinfo = subprocess.STARTUPINFO()
+            startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+
+        self._ffmpeg_proc = subprocess.Popen(
+            ffmpeg_cmd,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            startupinfo=startupinfo
+        )
 
         self._capture_thread = threading.Thread(target=self._capture_worker, daemon=True)
         self._capture_thread.start()
@@ -103,15 +166,25 @@ class ScreenRecorder:
                     time.sleep(sleep_time)
 
     def _write_worker(self):
-        """写入线程"""
+        """写入线程 - 将帧写入 FFmpeg stdin"""
         while not self._stop_event.is_set() or not self.queue.empty():
             try:
                 frame = self.queue.get(timeout=0.5)
-                if self.writer is not None:
-                    self.writer.write(frame)
-                    self.frame_count += 1
+                if self._ffmpeg_proc and self._ffmpeg_proc.poll() is None:
+                    try:
+                        self._ffmpeg_proc.stdin.write(frame.tobytes())
+                        self.frame_count += 1
+                    except (BrokenPipeError, OSError):
+                        break
             except Empty:
                 continue
+
+        # 关闭 FFmpeg stdin，让 FFmpeg 正常 flush 输出
+        if self._ffmpeg_proc:
+            try:
+                self._ffmpeg_proc.stdin.close()
+            except:
+                pass
 
     def stop(self):
         """停止录制"""
@@ -121,11 +194,14 @@ class ScreenRecorder:
         if self._capture_thread and self._capture_thread.is_alive():
             self._capture_thread.join(timeout=2.0)
         if self._write_thread and self._write_thread.is_alive():
-            self._write_thread.join(timeout=5.0)
+            self._write_thread.join(timeout=10.0)
 
-        if self.writer is not None:
-            self.writer.release()
-            self.writer = None
+        if self._ffmpeg_proc:
+            try:
+                self._ffmpeg_proc.wait(timeout=5.0)
+            except subprocess.TimeoutExpired:
+                self._ffmpeg_proc.kill()
+            self._ffmpeg_proc = None
 
         return self.frame_count
 
@@ -163,7 +239,7 @@ class RecordController:
             return sct.monitors[1:]
 
     def set_monitors(self, indices):
-        self.selected_monitors = indices if indices else [1]
+        self.selected_monitors = indices  # 允许 [] 表示纯录音模式
         self.region = None
 
     def set_region(self, x=None, y=None, width=None, height=None):
@@ -208,7 +284,9 @@ class RecordController:
                         output_paths.append(output)
 
             if not self.recorders:
-                raise RuntimeError("没有有效的录制目标")
+                # 纯音频模式：无视频录制，必须有音频
+                if not (self.record_mic or self.record_system):
+                    raise RuntimeError("没有有效的录制目标")
 
             # 启动音频采集 (多轨独立录制)
             self._audio_capture = None
@@ -230,8 +308,12 @@ class RecordController:
             if self.on_status_changed:
                 self.on_status_changed("recording")
 
-            print(f"开始录制 {len(self.recorders)} 个视频" +
-                  (" + 音频" if self._audio_capture else ""))
+            if self.recorders:
+                print(f"开始录制 {len(self.recorders)} 个视频" +
+                      (" + 音频" if self._audio_capture else ""))
+            else:
+                print("开始纯音频录制" +
+                      (" + 音频" if self._audio_capture else ""))
             return output_paths
 
         except Exception as e:
@@ -290,36 +372,50 @@ class RecordController:
         if self.on_status_changed:
             self.on_status_changed("stopped")
 
-        # 3. 合并音频到视频 (在后台线程执行，不阻塞 UI)
+        # 3. 合并音频到视频或生成纯音频文件 (在后台线程执行，不阻塞 UI)
         if audio_paths:
-            def _do_merge(paths, apaths):
-                from recorder.audio import merge_tracks
-                merged = []
-                for vp in paths:
-                    base, ext = os.path.splitext(vp)
-                    final_path = base + "_merged" + ext
-                    result = merge_tracks(vp, apaths, final_path)
-                    if result == final_path and os.path.exists(final_path):
+            if output_paths:
+                # 视频 + 音频合并
+                def _do_merge(paths, apaths):
+                    from recorder.audio import merge_tracks
+                    merged = []
+                    for vp in paths:
+                        base, ext = os.path.splitext(vp)
+                        final_path = base + "_merged" + ext
+                        result = merge_tracks(vp, apaths, final_path)
+                        if result == final_path and os.path.exists(final_path):
+                            try:
+                                os.remove(vp)
+                            except:
+                                pass
+                            merged.append(final_path)
+                        else:
+                            merged.append(vp)
+                    # 清理临时音频文件
+                    for name, ap in apaths.items():
                         try:
-                            os.remove(vp)
+                            os.remove(ap)
                         except:
                             pass
-                        merged.append(final_path)
-                    else:
-                        merged.append(vp)
-                # 清理临时音频文件
-                for name, ap in apaths.items():
-                    try:
-                        os.remove(ap)
-                    except:
-                        pass
-                # 合并完成后，通知 UI
-                for path in merged:
-                    if self.on_recording_complete and os.path.exists(path):
-                        self.on_recording_complete(path)
-                print(f"[合并完成] {len(merged)} 个视频已合并 {len(apaths)} 条音轨")
+                    # 合并完成后，通知 UI
+                    for path in merged:
+                        if self.on_recording_complete and os.path.exists(path):
+                            self.on_recording_complete(path)
+                    print(f"[合并完成] {len(merged)} 个视频已合并 {len(apaths)} 条音轨")
 
-            threading.Thread(target=_do_merge, args=(output_paths, audio_paths), daemon=True).start()
+                threading.Thread(target=_do_merge, args=(output_paths, audio_paths), daemon=True).start()
+            else:
+                # 纯音频模式：无视频，WAV → MP3
+                def _do_audio_only(apaths):
+                    from recorder.audio.mixer import merge_audio_only
+                    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                    mp3_path = os.path.join(self.output_dir, f"recording_{timestamp}.mp3")
+                    result = merge_audio_only(apaths, mp3_path)
+                    if result and self.on_recording_complete and os.path.exists(result):
+                        self.on_recording_complete(result)
+                    print(f"[纯录音完成] 输出: {result}")
+
+                threading.Thread(target=_do_audio_only, args=(audio_paths,), daemon=True).start()
         else:
             # 无音频，直接回调
             for path in output_paths:

@@ -11,14 +11,15 @@ from ctypes import wintypes
 
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QLabel,
-    QPushButton, QFrame, QScrollArea, QFileDialog, QCheckBox, QMessageBox, QMenu
+    QPushButton, QFrame, QScrollArea, QFileDialog, QCheckBox, QMessageBox, QMenu,
+    QSizePolicy  # <--- 必须加上这个
 )
 from PySide6.QtCore import Qt, QTimer, QPoint, QPointF, QRect, Signal
 from PySide6.QtGui import QPixmap, QImage, QColor, QPainter, QRadialGradient, QPen, QBrush
 
 import cv2
 
-from ui.widgets import RecordButton, ModeButton, StatusIndicator, TimeDisplay, TitleBar
+from ui.widgets import RecordButton, ModeButton, StatusIndicator, TimeDisplay, TitleBar, AudioToggleButton, AudioWaveWidget, DarkConfirmDialog
 from ui.styles import COLORS, BUTTON_STYLES
 from recorder.controller import RecordController
 from recorder.area_selector import select_area
@@ -57,7 +58,7 @@ WMSZ_BOTTOMRIGHT = 8
 _BORDER = 8
 
 
-# ────────────────── 勾选框样式工具 ──────────────────
+# ────────────────── 勾选框样式工具（显示器选择器使用） ──────────────────
 def _gen_cb_images(sz):
     """生成带 ✓ 打勾图标和空白图标的 PNG，返回 (checked_url, unchecked_url)"""
     r = max(1, int(sz * 0.28))
@@ -199,71 +200,60 @@ class BokehBackground(QWidget):
             painter.drawEllipse(int(x - radius), int(y - radius), int(radius * 2), int(radius * 2))
 # ────────────────── 视频卡片 ──────────────────
 class VideoCard(QFrame):
-    """视频卡片 - 手动定位，悬停向上放大，不影响邻居"""
+    """视频卡片 - 纯净稳健版 (修复 AttributeError 报错)"""
 
     def __init__(self, video_path, zoom=1.0, parent=None):
         super().__init__(parent)
         self.video_path = video_path
         self._zoom = zoom
+        self._is_audio = video_path.lower().endswith(('.mp3', '.wav', '.aac', '.m4a'))
+
+        # 1. 设定标准基准尺寸 (不缩放)
         self._base_w = wsc(160, zoom)
         self._base_h = wsc(120, zoom)
         self._base_x = 0
         self._base_y = 0
+
         self.setObjectName("videoCard")
-        self._apply_size()
-        self.setStyleSheet("""
-            #videoCard { background-color: rgba(255, 255, 255, 0.04); border-radius: 12px; border: 1px solid rgba(255, 255, 255, 0.06); }
-            #videoCard:hover { border-color: #00d9ff; background-color: rgba(0, 217, 255, 0.08); }
-        """)
+        self.setFixedSize(self._base_w, self._base_h)
+        self.setStyleSheet("#videoCard { background: transparent; border: none; }")
 
         layout = QVBoxLayout(self)
-        self._layout = layout
-        layout.setContentsMargins(wsc(8, zoom), wsc(8, zoom), wsc(8, zoom), wsc(8, zoom))
+        layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
         self.thumb = QLabel()
-        self.thumb.setFixedSize(wsc(144, zoom), wsc(104, zoom))
-        self.thumb.setStyleSheet("background-color: rgba(0, 0, 0, 0.3); border-radius: 6px;")
+        self.thumb.setFixedSize(self._base_w, self._base_h)
         self.thumb.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.thumb.setText("📹")
+
+        # 2. 纯样式实现高亮 (无需代码控制，最稳定)
+        self.thumb.setStyleSheet("""
+            QLabel { 
+                background-color: #000; 
+                border: 2px solid rgba(255, 255, 255, 0.1); 
+                border-radius: 8px; 
+            }
+            QLabel:hover { 
+                border: 2px solid #00d9ff; 
+            }
+        """)
+
+        if self._is_audio:
+            self.thumb.setText("🎵")
+        else:
+            self.thumb.setText("📹")
+
         layout.addWidget(self.thumb)
 
-        self._set_duration()
-        QTimer.singleShot(100, self._generate_thumb)
+        # 3. 业务初始化：只有视频才去获取时长和缩略图
+        if not self._is_audio:
+            self._set_duration()  # 刚才漏掉的方法现在补回来了
+            QTimer.singleShot(100, self._generate_thumb)
+
         self.setCursor(Qt.CursorShape.PointingHandCursor)
 
-    def enterEvent(self, event):
-        """鼠标进入 → 原地向上放大，不挤压邻居"""
-        super().enterEvent(event)
-        self.raise_()
-        scale = 1.15
-        new_w = int(self._base_w * scale)
-        new_h = int(self._base_h * scale)
-        # 底部对齐，向上放大
-        new_x = self._base_x - (new_w - self._base_w) // 2
-        new_y = self._base_y + self._base_h - new_h
-        self.setGeometry(new_x, new_y, new_w, new_h)
-
-    def leaveEvent(self, event):
-        """鼠标离开 → 恢复原始位置和大小"""
-        super().leaveEvent(event)
-        self.setGeometry(self._base_x, self._base_y, self._base_w, self._base_h)
-
-    def _apply_size(self):
-        z = self._zoom
-        self._base_w = wsc(160, z)
-        self._base_h = wsc(120, z)
-        self.setFixedSize(self._base_w, self._base_h)
-
-    def update_zoom(self, zoom):
-        self._zoom = zoom
-        self._apply_size()
-        z = zoom
-        self._layout.setContentsMargins(wsc(8, z), wsc(8, z), wsc(8, z), wsc(8, z))
-        self.thumb.setFixedSize(wsc(144, z), wsc(104, z))
-        self._generate_thumb()
-
     def _set_duration(self):
+        """获取并显示视频时长 (补充缺失的方法)"""
         try:
             cap = cv2.VideoCapture(self.video_path)
             if cap.isOpened():
@@ -273,11 +263,12 @@ class VideoCard(QFrame):
                 if fps > 0:
                     secs = int(frames / fps)
                     m, s = secs // 60, secs % 60
-                    self.setToolTip("时长: {:02d}:{:02d}".format(m, s))
-        except:
+                    self.setToolTip(f"时长: {m:02d}:{s:02d}")
+        except Exception:
             pass
 
     def _generate_thumb(self):
+        """生成视频缩略图 (补充缺失的方法)"""
         try:
             cap = cv2.VideoCapture(self.video_path)
             if cap.isOpened():
@@ -289,7 +280,7 @@ class VideoCard(QFrame):
                     if ret:
                         frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
                         h, w = frame.shape[:2]
-                        tw, th = wsc(144, self._zoom), wsc(104, self._zoom)
+                        tw, th = self._base_w, self._base_h
                         scale = min(tw / w, th / h)
                         nw, nh = int(w * scale), int(h * scale)
                         frame = cv2.resize(frame, (nw, nh))
@@ -297,48 +288,27 @@ class VideoCard(QFrame):
                         self.thumb.setPixmap(QPixmap.fromImage(img).scaled(
                             tw, th, Qt.AspectRatioMode.KeepAspectRatio,
                             Qt.TransformationMode.SmoothTransformation))
-        except:
+        except Exception:
             pass
 
-    def _preview_video(self):
-        os.startfile(self.video_path)
-
-    def _save_video(self):
-        name = os.path.basename(self.video_path)
-        default_path = os.path.join(os.path.expanduser("~"), "Videos", name)
-        path, _ = QFileDialog.getSaveFileName(
-            self, "保存视频", default_path, "视频 (*.mp4 *.avi)"
-        )
-        if path:
-            shutil.copy2(self.video_path, path)
-            QMessageBox.information(self, "完成", "视频已保存到:\n{}".format(path))
+    def update_zoom(self, zoom):
+        self._zoom = zoom
+        self._base_w = wsc(160, zoom)
+        self._base_h = wsc(120, zoom)
+        self.setFixedSize(self._base_w, self._base_h)
+        self.thumb.setFixedSize(self._base_w, self._base_h)
+        if not self._is_audio:
+            self._generate_thumb()
 
     def mousePressEvent(self, event):
+        """点击打开视频"""
         if event.button() == Qt.MouseButton.LeftButton:
-            self._preview_video()
-        elif event.button() == Qt.MouseButton.RightButton:
-            menu = QMenu(self)
-            menu.setStyleSheet("""
-                QMenu {
-                    background-color: rgba(22, 22, 35, 0.95);
-                    color: #ffffff;
-                    font-size: %dpx;
-                    border: 1px solid rgba(255, 255, 255, 0.08);
-                    border-radius: 8px;
-                    padding: 8px;
-                }
-                QMenu::item { padding: 10px 30px; border-radius: 6px; background: transparent; }
-                QMenu::item:selected { background-color: rgba(0, 217, 255, 0.15); }
-            """ % wsc(18, self._zoom))
-            preview_action = menu.addAction("▶  预览")
-            save_action = menu.addAction("💾  另存为")
-            action = menu.exec(event.globalPosition().toPoint())
-            if action == preview_action:
-                self._preview_video()
-            elif action == save_action:
-                self._save_video()
+            os.startfile(self.video_path)
+        super().mousePressEvent(event)
 
-
+    def enterEvent(self, event):
+        self.raise_()
+        super().enterEvent(event)
 class MonitorSelector(QFrame):
     """显示器选择器"""
 
@@ -589,9 +559,9 @@ class MainWindow(QMainWindow):
         self.region_btn.update_zoom(z)
         self._mode_layout.setSpacing(wsc(18, z))
 
-        # 音频勾选框
-        self.mic_check.setStyleSheet(_cb_style(z, font_sz=20, ind_sz=26))
-        self.sys_check.setStyleSheet(_cb_style(z, font_sz=20, ind_sz=26))
+        # 音频按钮
+        self.mic_check.update_zoom(z)
+        self.sys_check.update_zoom(z)
 
         # 显示器选择器
         self.monitor_selector.update_zoom(z)
@@ -703,6 +673,11 @@ class MainWindow(QMainWindow):
             "color: #a0a0a0; font-size: {}px; background: transparent; border: none;".format(wsc(22, z)))
         self.info_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._info_layout.addWidget(self.info_label)
+
+        self._audio_wave = AudioWaveWidget(zoom=z)
+        self._audio_wave.hide()
+        self._info_layout.addWidget(self._audio_wave)
+
         ct.addWidget(self.info_frame)
 
         ct.addWidget(self._line())
@@ -729,6 +704,9 @@ class MainWindow(QMainWindow):
         self.monitor_label.setStyleSheet("color: #a0a0a0; font-size: {}px; font-weight: bold; background: transparent;".format(wsc(22, z)))
         ct.addWidget(self.monitor_label)
         self.monitor_selector = MonitorSelector(zoom=z)
+        # 监听显示器勾选变化 → 自动切换按钮文字
+        for cb in self.monitor_selector.checkboxes:
+            cb.stateChanged.connect(self._on_monitor_changed)
         ct.addWidget(self.monitor_selector)
 
         ct.addWidget(self._line())
@@ -739,16 +717,14 @@ class MainWindow(QMainWindow):
         audio_layout = QHBoxLayout()
         audio_layout.setSpacing(wsc(24, z))
 
-        self.mic_check = QCheckBox("🎤  麦克风")
+        self.mic_check = AudioToggleButton("🎤", "麦克风", zoom=z)
         self.mic_check.setChecked(True)
-        self.mic_check.stateChanged.connect(self._on_audio_toggle)
-        self.mic_check.setStyleSheet(_cb_style(z, font_sz=20, ind_sz=26))
+        self.mic_check.toggled.connect(self._on_audio_toggle)
         audio_layout.addWidget(self.mic_check)
 
-        self.sys_check = QCheckBox("🔊  系统声音")
+        self.sys_check = AudioToggleButton("🔊", "系统声音", zoom=z)
         self.sys_check.setChecked(True)
-        self.sys_check.stateChanged.connect(self._on_audio_toggle)
-        self.sys_check.setStyleSheet(_cb_style(z, font_sz=20, ind_sz=26))
+        self.sys_check.toggled.connect(self._on_audio_toggle)
         audio_layout.addWidget(self.sys_check)
 
         audio_layout.addStretch()
@@ -779,7 +755,7 @@ class MainWindow(QMainWindow):
         # 视频列表标题行：标签 + 文件夹按钮
         video_header = QHBoxLayout()
         video_header.setContentsMargins(0, 0, 0, 0)
-        self._video_label = QLabel("已录制视频（点击另存为）")
+        self._video_label = QLabel("已录制文件（点击另存为）")
         self._video_label.setStyleSheet("color: #a0a0a0; font-size: {}px; font-weight: bold; background: transparent;".format(wsc(22, z)))
         video_header.addWidget(self._video_label)
         video_header.addStretch()
@@ -899,14 +875,18 @@ class MainWindow(QMainWindow):
         self.record_mode = mode
         self.fullscreen_btn.setChecked(mode == "fullscreen")
         self.region_btn.setChecked(mode == "region")
-        self.monitor_label.setVisible(mode == "fullscreen")
-        self.monitor_selector.setVisible(mode == "fullscreen")
 
         if mode == "fullscreen":
+            self.monitor_label.setText("选择显示器（可多选）")
+            self.monitor_selector.setEnabled(True)
             selected = self.monitor_selector.get_selected()
             self.info_label.setText("已选择 {} 个显示器，点击开始录制".format(len(selected)))
             self._current_info_text = self.info_label.text()
         else:
+            self.monitor_label.setText("选择显示器（区域录制时不可用）")
+            self.monitor_selector.setEnabled(False)
+            for cb in self.monitor_selector.checkboxes:
+                cb.setChecked(False)
             self.info_label.setText("点击开始后拖拽选择录制区域")
             self._current_info_text = self.info_label.text()
 
@@ -943,16 +923,27 @@ class MainWindow(QMainWindow):
         else:
             self.recorder.set_fullscreen()
             selected = self.monitor_selector.get_selected()
-            self.recorder.set_monitors(selected)
 
-            if len(selected) == 1:
-                self.info_label.setText("正在录制显示器 {}...".format(selected[0]))
+            if not selected:
+                has_audio = self.mic_check.isChecked() or self.sys_check.isChecked()
+                if not has_audio:
+                    self.info_label.setText("请至少选择一个显示器或开启音频")
+                    self._current_info_text = self.info_label.text()
+                    return
+                # 纯录音模式，直接开始，不弹窗
+                self.recorder.set_monitors([])
+                self._audio_only = True
             else:
-                self.info_label.setText("正在录制 {} 个显示器...".format(len(selected)))
-            self._current_info_text = self.info_label.text()
+                self.recorder.set_monitors(selected)
+                self._audio_only = False
+                if len(selected) == 1:
+                    self.info_label.setText("正在录制显示器 {}...".format(selected[0]))
+                else:
+                    self.info_label.setText("正在录制 {} 个显示器...".format(len(selected)))
+                self._current_info_text = self.info_label.text()
 
         paths = self.recorder.start()
-        if paths:
+        if paths is not None:
             self.elapsed = 0
             self.timer.start(100)
             self.record_btn.set_recording(True)
@@ -962,9 +953,20 @@ class MainWindow(QMainWindow):
             self.region_btn.setEnabled(False)
             self.monitor_selector.setEnabled(False)
             self._update_status("recording", "录制中")
+            # 纯录音模式：显示波形动画
+            if getattr(self, '_audio_only', False):
+                self.info_label.hide()
+                self._audio_wave.show()
+                self._audio_wave.start()
 
     def _stop_record(self):
-        self.info_label.setText("正在保存视频...")
+        # 停止音频波形动画
+        if self._audio_wave.isVisible():
+            self._audio_wave.stop()
+            self._audio_wave.hide()
+            self.info_label.show()
+
+        self.info_label.setText("正在保存...")
         self._current_info_text = self.info_label.text()
         from PySide6.QtWidgets import QApplication
         QApplication.processEvents()
@@ -979,13 +981,18 @@ class MainWindow(QMainWindow):
         self.fullscreen_btn.setEnabled(True)
         self.region_btn.setEnabled(True)
         self.monitor_selector.setEnabled(True)
+        # 区域录制恢复时重新禁用显示器勾选
+        if self.record_mode == "region":
+            self.monitor_selector.setEnabled(False)
 
         self._update_status("idle", "就绪")
 
         # 如果有音频需要合并，显示提示 (合并会在后台线程执行)
         has_audio = (self.mic_check.isChecked() or self.sys_check.isChecked())
-        if has_audio:
+        if has_audio and paths:
             self.info_label.setText("正在合并音视频，请稍候...")
+        elif has_audio and not paths:
+            self.info_label.setText("正在保存录音，请稍候...")
         else:
             self.info_label.setText("录制完成，共 {} 个视频".format(len(paths)))
         self._current_info_text = self.info_label.text()
@@ -1031,6 +1038,23 @@ class MainWindow(QMainWindow):
         self._license_activated = True
         self._start_record()
 
+    def _on_monitor_changed(self):
+        """显示器勾选变化时，自动切换按钮文字"""
+        if self.record_mode != "fullscreen":
+            return
+        selected = self.monitor_selector.get_selected()
+        if selected:
+            self.fullscreen_btn.setText("🖥  全屏录制")
+            self.info_label.setText("已选择 {} 个显示器，点击开始录制".format(len(selected)))
+        else:
+            self.fullscreen_btn.setText("🎙️  仅录音")
+            has_audio = self.mic_check.isChecked() or self.sys_check.isChecked()
+            if has_audio:
+                self.info_label.setText("未选择显示器，将仅进行录音")
+            else:
+                self.info_label.setText("请至少选择一个显示器或开启音频")
+        self._current_info_text = self.info_label.text()
+
     def _on_audio_toggle(self):
         """实时切换麦克风/系统声音静音"""
         cap = getattr(self.recorder, '_audio_capture', None)
@@ -1050,7 +1074,11 @@ class MainWindow(QMainWindow):
             self._video_cards.insert(0, card)  # newest first
             self._layout_video_cards()
             # 合并完成后更新提示文字
-            self.info_label.setText("录制完成，共 {} 个视频".format(len(self._video_paths)))
+            is_audio = path.lower().endswith(('.mp3', '.wav', '.aac', '.m4a'))
+            if is_audio:
+                self.info_label.setText("录音完成，共 {} 个文件".format(len(self._video_paths)))
+            else:
+                self.info_label.setText("录制完成，共 {} 个视频".format(len(self._video_paths)))
             self._current_info_text = self.info_label.text()
 
     def _on_close(self):
@@ -1065,21 +1093,26 @@ class MainWindow(QMainWindow):
             os.startfile(output_dir)
 
     def _layout_video_cards(self, z=None):
-        """手动排列视频卡片（无布局管理器），悬停放大不影响邻居"""
-        if z is None:
-            z = self._zoom
+        """标准排列：紧凑对齐，不预留夸张空间"""
+        if z is None: z = self._zoom
+
         spacing = wsc(20, z)
-        margin = wsc(12, z)
-        x = margin
-        max_h = 0
+        margin_x = wsc(20, z)
+        margin_y = wsc(10, z)
+
+        container_h = self._scroll_area.height()
+
+        x = margin_x
         for card in self._video_cards:
             card._base_x = x
-            card._base_y = margin
-            card.setGeometry(x, margin, card._base_w, card._base_h)
+            # 贴底对齐
+            card._base_y = container_h - card._base_h - margin_y
+
+            card.setGeometry(card._base_x, card._base_y, card._base_w, card._base_h)
             card.show()
             x += card._base_w + spacing
-            max_h = max(max_h, card._base_h)
-        self.video_container.setMinimumSize(x + margin - spacing, max_h + 2 * margin)
+
+        self.video_container.setMinimumSize(x + margin_x, container_h)
 
     def _scroll_videos(self, direction):
         """箭头点击滚动: direction=-1 左, +1 右"""
@@ -1119,12 +1152,13 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event):
         if self.recorder.is_recording:
-            reply = QMessageBox.question(
-                self, "确认退出",
+            dlg = DarkConfirmDialog(
+                "确认退出",
                 "正在录制中，确定要退出吗？\n录制将被保存。",
-                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+                self
             )
-            if reply == QMessageBox.StandardButton.Yes:
+            dlg.exec()
+            if dlg.result_yes():
                 self.hide()  # 【核心修复】：先瞬间隐藏主窗口，眼不见为净！
                 self._stop_record()
                 self.recorder.close()  # 后台慢慢释放资源，用户完全感觉不到卡顿
