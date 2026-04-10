@@ -9,6 +9,9 @@ try:
 except ImportError:
     HAS_AUDIO = False
 
+# 模块级设备信息缓存（首次探测后复用，避免每次录制重新枚举 WASAPI 设备）
+_device_cache = None
+
 
 def find_mic_device(pa):
     """查找默认麦克风设备
@@ -61,3 +64,23 @@ def find_loopback_device(pa):
     except Exception as e:
         print(f"[AudioSource] 系统音频设备查找失败: {e}")
         return None
+
+
+def get_cached_devices(pa):
+    """获取设备信息（首次调用时探测并缓存，后续直接复用）"""
+    global _device_cache
+    if _device_cache is None:
+        _device_cache = {
+            'mic': find_mic_device(pa),
+            'sys': find_loopback_device(pa),
+        }
+    return _device_cache
+
+
+def refresh_device_cache(pa):
+    """强制刷新设备缓存（设备热插拔后调用）"""
+    global _device_cache
+    _device_cache = {
+        'mic': find_mic_device(pa),
+        'sys': find_loopback_device(pa),
+    }

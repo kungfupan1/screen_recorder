@@ -233,6 +233,17 @@ class RecordController:
         if not os.path.exists(output_dir):
             os.makedirs(output_dir)
 
+        # 后台预初始化音频子系统（PyAudio + WASAPI 设备探测）
+        # 首次约 300-500ms，后续录制直接复用缓存，点击录制几乎无延迟
+        threading.Thread(target=self._preinit_audio, daemon=True).start()
+
+    def _preinit_audio(self):
+        try:
+            from recorder.audio import preinit_audio
+            preinit_audio()
+        except:
+            pass
+
     @staticmethod
     def get_monitors():
         with mss.mss() as sct:

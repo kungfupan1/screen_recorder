@@ -5,6 +5,7 @@
 import os
 import shutil
 import random
+import math
 import ctypes
 import tempfile
 from ctypes import wintypes
@@ -12,7 +13,7 @@ from ctypes import wintypes
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QLabel,
     QPushButton, QFrame, QScrollArea, QFileDialog, QCheckBox, QMessageBox, QMenu,
-    QSizePolicy  # <--- 必须加上这个
+    QSizePolicy, QDialog  # <--- 必须加上这个
 )
 from PySide6.QtCore import Qt, QTimer, QPoint, QPointF, QRect, Signal
 from PySide6.QtGui import QPixmap, QImage, QColor, QPainter, QRadialGradient, QPen, QBrush
@@ -127,7 +128,7 @@ class BokehBackground(QWidget):
         super().__init__(parent)
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self.setStyleSheet(
-            "background-color: #1a1a2e; border-radius: 16px; border: 1px solid rgba(255, 255, 255, 0.05);")
+            "background-color: #1a1a2e; border-radius: 16px; border: none;")
 
         self._particles = []
         self._num_particles = 3
@@ -364,6 +365,114 @@ class MonitorSelector(QFrame):
                 "color: #808080; font-size: %dpx; margin-top: %dpx; background: transparent;" % (wsc(20, z), wsc(12, z)))
 
 
+# ────────────────── 免费版限时弹窗 ──────────────────
+class _TimeLimitDialog(QDialog):
+    """90秒限时提示弹窗"""
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        z = 1.0
+        self._go_subscribe = False
+        self.setWindowFlags(Qt.WindowType.FramelessWindowHint | Qt.WindowType.Dialog)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+
+        w, h = wsc(420, z), wsc(220, z)
+        self.setFixedSize(w, h)
+
+        bg = QFrame(self)
+        bg.setGeometry(0, 0, w, h)
+        bg.setObjectName("TimeLimitBg")
+        bg.setStyleSheet(
+            "QFrame#TimeLimitBg { background-color: #1a1a2e; border-radius: 12px; "
+            "border: 2px solid rgba(233, 69, 96, 0.6); }")
+        outer = QVBoxLayout(bg)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
+
+        # 标题
+        tb = QFrame()
+        tb.setFixedHeight(wsc(44, z))
+        tb.setStyleSheet("background: transparent;")
+        tbl = QHBoxLayout(tb)
+        tbl.setContentsMargins(wsc(20, z), 0, wsc(10, z), 0)
+        tt = QLabel("⏰ 录制时间到")
+        tt.setStyleSheet("color: #e94560; font-size: %dpx; font-weight: bold; background: transparent;" % wsc(18, z))
+        tbl.addWidget(tt)
+        tbl.addStretch()
+        outer.addWidget(tb)
+
+        # 正文
+        body = QWidget()
+        body.setStyleSheet("background: transparent;")
+        bl = QVBoxLayout(body)
+        bl.setContentsMargins(wsc(24, z), 0, wsc(24, z), wsc(24, z))
+        bl.setSpacing(wsc(16, z))
+
+        msg = QLabel("免费版录制时长已达 90 秒上限，视频已自动保存。\n开通会员可解除时长限制，享受无限录制。")
+        msg.setWordWrap(True)
+        msg.setStyleSheet("color: #a0a0a0; font-size: %dpx; background: transparent; line-height: 1.6;" % wsc(14, z))
+        bl.addWidget(msg)
+        bl.addStretch()
+
+        btn_row = QHBoxLayout()
+        btn_row.setSpacing(wsc(12, z))
+        sub_btn = QPushButton("👑 去开通会员")
+        sub_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        sub_btn.setFixedSize(wsc(150, z), wsc(38, z))
+        sub_btn.setStyleSheet(
+            "QPushButton { background-color: #ffc107; color: #1a1a2e; border: none; "
+            "border-radius: 6px; font-weight: bold; font-size: %dpx; } "
+            "QPushButton:hover { background-color: #ffda6a; }" % wsc(14, z))
+        sub_btn.clicked.connect(self._on_subscribe)
+        btn_row.addWidget(sub_btn)
+        btn_row.addStretch()
+        ok_btn = QPushButton("我知道了")
+        ok_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        ok_btn.setFixedSize(wsc(120, z), wsc(38, z))
+        ok_btn.setStyleSheet(
+            "QPushButton { background-color: #3a3a5a; color: #a0a0a0; border: none; "
+            "border-radius: 6px; font-weight: bold; font-size: %dpx; } "
+            "QPushButton:hover { background-color: #4a4a6a; color: #ffffff; }" % wsc(14, z))
+        ok_btn.clicked.connect(self.accept)
+        btn_row.addWidget(ok_btn)
+        bl.addLayout(btn_row)
+        outer.addWidget(body)
+
+        if parent:
+            pg = parent.geometry()
+            self.move(pg.x() + (pg.width() - w) // 2, pg.y() + (pg.height() - h) // 2)
+
+    def _on_subscribe(self):
+        self._go_subscribe = True
+        self.accept()
+
+
+# ────────────────── 红色呼吸光效覆层 ──────────────────
+class _GlowOverlay(QWidget):
+    """红色呼吸光效 - 覆盖在卡片上方，边缘发光"""
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        self._opacity = 0.0
+
+    def set_opacity(self, val):
+        self._opacity = val
+        self.update()
+
+    def paintEvent(self, event):
+        if self._opacity <= 0:
+            return
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        alpha = int(self._opacity * 200)
+        w, h = self.width(), self.height()
+        pw = 4
+        pen = QPen(QColor(255, 60, 60, alpha), pw)
+        painter.setPen(pen)
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        painter.drawRoundedRect(pw // 2, pw // 2, w - pw, h - pw, 16, 16)
+
+
 # ────────────────── 主窗口 ──────────────────
 class MainWindow(QMainWindow):
     """主窗口 - 系统级等比缩放"""
@@ -521,6 +630,9 @@ class MainWindow(QMainWindow):
         if abs(new_zoom - self._zoom) > 0.01:
             self._zoom = new_zoom
             self.update_ui_scale(new_zoom)
+        # 同步光效覆层大小
+        if hasattr(self, '_glow_overlay'):
+            self._glow_overlay.setGeometry(0, 0, self._card.width(), self._card.height())
 
     def update_ui_scale(self, zoom):
         """在现有控件上原地更新尺寸/字体，不销毁不重建"""
@@ -619,6 +731,13 @@ class MainWindow(QMainWindow):
 
         self._build_content(self._zoom)
 
+        # 红色呼吸光效覆层（置于卡片内容之上）
+        self._glow_overlay = _GlowOverlay(self._card)
+        self._glow_overlay.raise_()
+        self._glow_timer = QTimer(self)
+        self._glow_timer.timeout.connect(self._animate_glow)
+        self._glow_phase = 0.0
+
     def _build_content(self, zoom):
         z = zoom
         card = self._card
@@ -632,6 +751,7 @@ class MainWindow(QMainWindow):
         self._title_bar.minimize_clicked.connect(self.showMinimized)
         # 【新增这行】：点击订阅按钮时，直接调用本类中的 _show_payment_dialog 方法
         self._title_bar.subscribe_clicked.connect(self._show_payment_dialog)
+        self._title_bar.set_version_label(not self._license_activated)
         cl.addWidget(self._title_bar)
 
         # 内容区域
@@ -659,13 +779,14 @@ class MainWindow(QMainWindow):
 
         # 时间显示
         self.time_display = TimeDisplay(zoom=z)
+        self.time_display.set_free_mode(not self._license_activated)
         self.time_display.set_time(int(self.elapsed))
         ct.addWidget(self.time_display)
 
         # 录制信息
         self.info_frame = QFrame()
         self.info_frame.setStyleSheet(
-            "QFrame { background-color: rgba(255, 255, 255, 0.04); border-radius: 10px; border: 1px solid rgba(255, 255, 255, 0.06); }")
+            "QFrame { background-color: rgba(255, 255, 255, 0.04); border-radius: 10px; border: none; }")
         self._info_layout = QVBoxLayout(self.info_frame)
         self._info_layout.setContentsMargins(wsc(18, z), wsc(14, z), wsc(18, z), wsc(14, z))
         self.info_label = QLabel(self._current_info_text)
@@ -696,6 +817,10 @@ class MainWindow(QMainWindow):
 
         self.region_btn = ModeButton("区域录制", "📐", zoom=z)
         self.region_btn.clicked.connect(lambda: self._set_mode("region"))
+        # 免费版：禁用区域录制 + VIP角标
+        if not self._license_activated:
+            self.region_btn.setEnabled(False)
+            self.region_btn.set_vip_badge(True)
         self._mode_layout.addWidget(self.region_btn)
         ct.addLayout(self._mode_layout)
 
@@ -894,9 +1019,6 @@ class MainWindow(QMainWindow):
         if self.recorder.is_recording:
             self._stop_record()
         else:
-            if not self._license_activated:
-                self._show_payment_dialog()
-                return
             self._start_record()
 
     def _start_record(self):
@@ -1014,6 +1136,34 @@ class MainWindow(QMainWindow):
         self.elapsed = self.recorder.get_duration()
         self.time_display.set_time(int(self.elapsed))
 
+        # 免费版 90 秒限制
+        if not self._license_activated and self.elapsed >= 90:
+            self._stop_record()
+            self.info_label.setText("免费版限时90秒已到，开通会员解除限制")
+            self._current_info_text = self.info_label.text()
+            # 启动红色呼吸光效 + 弹窗提示
+            self._start_glow()
+            dlg = _TimeLimitDialog(self)
+            dlg.finished.connect(self._stop_glow)
+            dlg.exec()
+            if dlg._go_subscribe:
+                self._stop_glow()
+                self._show_payment_dialog()
+
+    def _start_glow(self):
+        self._glow_overlay.setGeometry(0, 0, self._card.width(), self._card.height())
+        self._glow_phase = 0.0
+        self._glow_timer.start(30)
+
+    def _stop_glow(self):
+        self._glow_timer.stop()
+        self._glow_overlay.set_opacity(0)
+
+    def _animate_glow(self):
+        self._glow_phase += 0.08
+        opacity = 0.5 + 0.5 * math.sin(self._glow_phase)
+        self._glow_overlay.set_opacity(opacity)
+
     def _update_status(self, status, text):
         self.status_label.setText(text)
         self.indicator.set_status(status)
@@ -1036,6 +1186,12 @@ class MainWindow(QMainWindow):
 
     def _on_payment_success(self):
         self._license_activated = True
+        # 移除免费版标识
+        self._title_bar.set_version_label(False)
+        self.time_display.set_free_mode(False)
+        # 区域录制按钮恢复
+        self.region_btn.setEnabled(True)
+        self.region_btn.set_vip_badge(False)
         self._start_record()
 
     def _on_monitor_changed(self):

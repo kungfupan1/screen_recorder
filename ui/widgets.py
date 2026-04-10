@@ -6,7 +6,7 @@ from PySide6.QtWidgets import (
     QWidget, QPushButton, QLabel, QHBoxLayout, QVBoxLayout, QFrame, QDialog
 )
 from PySide6.QtCore import Qt, Signal, QTimer
-from PySide6.QtGui import QPainter, QColor, QBrush, QFont, QLinearGradient
+from PySide6.QtGui import QPainter, QColor, QBrush, QFont, QPen, QLinearGradient
 
 from qfluentwidgets import TransparentToolButton
 from qfluentwidgets import FluentIcon as FIF
@@ -98,6 +98,7 @@ class ModeButton(QPushButton):
     def __init__(self, text="", icon="", zoom=1.0, parent=None):
         super().__init__(f"{icon}  {text}" if icon else text, parent)
         self._zoom = zoom
+        self._vip_badge = False
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setCheckable(True)
         self.setFixedHeight(wsc(65, zoom))
@@ -109,7 +110,7 @@ class ModeButton(QPushButton):
             QPushButton {{
                 background-color: {COLORS['bg_card']};
                 color: {COLORS['text_secondary']};
-                border: 2px solid transparent;
+                border: none;
                 border-radius: {wsc(12, z)}px;
                 padding: {wsc(12, z)}px {wsc(20, z)}px;
                 font-size: {wsc(20, z)}px;
@@ -124,7 +125,36 @@ class ModeButton(QPushButton):
                 color: {COLORS['success']};
                 border-color: {COLORS['success']};
             }}
+            QPushButton:disabled {{
+                background-color: #3a3a4a;
+                color: #6a6a7a;
+                border: none;
+            }}
         """)
+
+    def set_vip_badge(self, show: bool):
+        self._vip_badge = show
+        self.update()
+
+    def paintEvent(self, event):
+        super().paintEvent(event)
+        if self._vip_badge:
+            painter = QPainter(self)
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+            z = self._zoom
+            r = wsc(10, z)
+            m = wsc(6, z)
+            cx = self.width() - m - r
+            cy = m + r
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(QBrush(QColor("#ffc107")))
+            painter.drawEllipse(int(cx - r), int(cy - r), int(r * 2), int(r * 2))
+            painter.setPen(QPen(QColor("#1a1a2e")))
+            font = QFont("Arial", max(1, int(wsc(10, z))), QFont.Weight.Bold)
+            painter.setFont(font)
+            painter.drawText(int(cx - r), int(cy - r), int(r * 2), int(r * 2),
+                           Qt.AlignmentFlag.AlignCenter, "V")
+            painter.end()
 
     def update_zoom(self, zoom):
         self._zoom = zoom
@@ -169,20 +199,36 @@ class StatusIndicator(QWidget):
         painter.drawEllipse(0, 0, dot, dot)
 
 
-class TimeDisplay(QLabel):
+class TimeDisplay(QFrame):
     """时间显示组件"""
 
     def __init__(self, zoom=1.0, parent=None):
-        super().__init__("00:00:00", parent)
+        super().__init__(parent)
         self._zoom = zoom
-        self.setObjectName("timeLabel")
+        self._is_free = False
+
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+        layout.addStretch()
+
+        self._time_label = QLabel("00:00:00")
+        self._time_label.setObjectName("timeLabel")
+        layout.addWidget(self._time_label)
+
+        self._suffix_label = QLabel("")
+        self._suffix_label.setObjectName("timeSuffix")
+        self._suffix_label.hide()
+        layout.addWidget(self._suffix_label)
+
+        layout.addStretch()
+
         self._apply_style()
-        self.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.setMinimumHeight(wsc(50, zoom))
 
     def _apply_style(self):
         z = self._zoom
-        self.setStyleSheet(f"""
+        self._time_label.setStyleSheet(f"""
             QLabel#timeLabel {{
                 color: {COLORS['text_primary']};
                 font-size: {wsc(36, z)}px;
@@ -192,12 +238,30 @@ class TimeDisplay(QLabel):
                 background: transparent;
             }}
         """)
+        self._suffix_label.setStyleSheet(f"""
+            QLabel#timeSuffix {{
+                color: #e94560;
+                font-size: {wsc(20, z)}px;
+                font-family: "Microsoft YaHei", "Segoe UI", sans-serif;
+                background: transparent;
+                margin-left: {wsc(8, z)}px;
+            }}
+        """)
 
     def set_time(self, seconds: float):
         hours = int(seconds // 3600)
         minutes = int((seconds % 3600) // 60)
         secs = int(seconds % 60)
-        self.setText(f"{hours:02d}:{minutes:02d}:{secs:02d}")
+        self._time_label.setText(f"{hours:02d}:{minutes:02d}:{secs:02d}")
+
+    def set_free_mode(self, is_free: bool):
+        self._is_free = is_free
+        if is_free:
+            self._suffix_label.setText("(免费限时90S)")
+            self._suffix_label.show()
+        else:
+            self._suffix_label.hide()
+        self._apply_style()
 
     def update_zoom(self, zoom):
         self._zoom = zoom
@@ -411,7 +475,7 @@ class AudioToggleButton(QPushButton):
                 background: transparent;
                 color: #666666;
                 border: none;
-                font-size: {wsc(20, z)}px;
+                font-size: {wsc(23, z)}px;
                 font-family: "Microsoft YaHei", "Segoe UI", sans-serif;
                 padding: 0px;
             }}
@@ -481,6 +545,11 @@ class TitleBar(QWidget):
             background: transparent;
         """)
         layout.addWidget(self._title_label)
+
+        # 免费版标识
+        self._version_label = QLabel("")
+        self._version_label.setObjectName("versionLabel")
+        layout.addWidget(self._version_label)
 
         # 将左侧文字和右侧按钮推开的弹簧
         layout.addStretch()
@@ -569,6 +638,20 @@ class TitleBar(QWidget):
             }}
         """)
 
+    def set_version_label(self, is_free: bool):
+        z = self._zoom
+        if is_free:
+            self._version_label.setText("[免费版]")
+            self._version_label.setStyleSheet(f"""
+                QLabel#versionLabel {{
+                    color: #808080;
+                    font-size: {wsc(18, z)}px;
+                    background: transparent;
+                }}
+            """)
+        else:
+            self._version_label.setText("")
+
     def update_zoom(self, zoom):
         self._zoom = zoom
         z = zoom
@@ -580,6 +663,13 @@ class TitleBar(QWidget):
             font-size: {wsc(28, z)}px;
             font-weight: bold;
             background: transparent;
+        """)
+        self._version_label.setStyleSheet(f"""
+            QLabel#versionLabel {{
+                color: #808080;
+                font-size: {wsc(18, z)}px;
+                background: transparent;
+            }}
         """)
         btn_sz = wsc(35, z)
         self._min_btn.setFixedSize(btn_sz, btn_sz)
