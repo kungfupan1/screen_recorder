@@ -7,6 +7,7 @@ import time
 import mss
 import subprocess
 import os
+import json
 from datetime import datetime
 import numpy as np
 from queue import Queue, Empty
@@ -15,14 +16,47 @@ from queue import Queue, Empty
 class ScreenRecorder:
     """单个屏幕录制器"""
 
-    _cached_encoder = None  # 类变量缓存，只探测一次
+    _cached_encoder = None  # 内存缓存（会话内复用）
+
+    @classmethod
+    def _encoder_cache_path(cls):
+        return os.path.join(os.environ.get('LOCALAPPDATA', ''), '录屏王', 'encoder_cache.json')
+
+    @classmethod
+    def _load_encoder_cache(cls):
+        """从磁盘读取缓存的编码器名称"""
+        try:
+            with open(cls._encoder_cache_path(), 'r') as f:
+                data = json.load(f)
+                return data.get('encoder')
+        except:
+            return None
+
+    @classmethod
+    def _save_encoder_cache(cls, encoder):
+        """将编码器名称写入磁盘缓存"""
+        try:
+            path = cls._encoder_cache_path()
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            with open(path, 'w') as f:
+                json.dump({'encoder': encoder}, f)
+        except:
+            pass
 
     @classmethod
     def _detect_encoder(cls, ffmpeg_path):
-        """探测可用的 H.264 编码器（只执行一次，结果缓存）"""
+        """探测可用的 H.264 编码器（内存→磁盘→实时探测）"""
+        # 1. 内存缓存
         if cls._cached_encoder is not None:
             return cls._cached_encoder
 
+        # 2. 磁盘缓存
+        cached = cls._load_encoder_cache()
+        if cached:
+            cls._cached_encoder = cached
+            return cached
+
+        # 3. 实时探测
         for encoder in ['h264_nvenc', 'h264_amf', 'h264_qsv', 'libopenh264']:
             try:
                 startupinfo = None
@@ -38,14 +72,16 @@ class ScreenRecorder:
                 )
                 if result.returncode == 0:
                     cls._cached_encoder = encoder
+                    cls._save_encoder_cache(encoder)
                     return encoder
             except:
                 pass
 
         cls._cached_encoder = 'mpeg4'
+        cls._save_encoder_cache('mpeg4')
         return 'mpeg4'
 
-    def __init__(self, bounds, output_path, fps=30):
+    def __init__(self, bounds, output_path, fps=30, watermark=False):
         x, y, w, h = [int(v) for v in bounds]
         self.width = w if w % 2 == 0 else w - 1
         self.height = h if h % 2 == 0 else h - 1
@@ -53,6 +89,7 @@ class ScreenRecorder:
 
         self.output_path = output_path
         self.fps = fps
+        self._watermark = watermark
 
         self._ffmpeg_proc = None
         self.frame_count = 0
@@ -61,6 +98,7 @@ class ScreenRecorder:
         self._pause_event = threading.Event()
         self._capture_thread = None
         self._write_thread = None
+        self._wm_overlay = None  # 预渲染的水印 RGBA 图层
 
     def pause(self):
         """暂停录制"""
@@ -114,6 +152,40 @@ class ScreenRecorder:
             startupinfo=startupinfo
         )
 
+        # 容错：如果缓存的编码器不可用（如换了显卡），FFmpeg 会立即退出
+        if self._ffmpeg_proc.poll() is not None and self._ffmpeg_proc.returncode != 0:
+            # 清除缓存，重新探测
+            ScreenRecorder._cached_encoder = None
+            try:
+                os.remove(ScreenRecorder._encoder_cache_path())
+            except:
+                pass
+            encoder = ScreenRecorder._detect_encoder(get_resource_path('ffmpeg'))
+            # 重建 FFmpeg 命令并重试
+            ffmpeg_cmd = [
+                get_resource_path('ffmpeg'), '-y',
+                '-f', 'rawvideo', '-vcodec', 'rawvideo',
+                '-pix_fmt', 'bgr24',
+                '-s', f'{self.width}x{self.height}',
+                '-r', str(self.fps), '-i', '-',
+            ]
+            if encoder == 'h264_nvenc':
+                ffmpeg_cmd += ['-c:v', 'h264_nvenc', '-preset', 'p1', '-tune', 'ull', '-cq', '20', '-pix_fmt', 'yuv420p']
+            elif encoder == 'h264_amf':
+                ffmpeg_cmd += ['-c:v', 'h264_amf', '-quality', 'speed', '-rc', 'cqp', '-qp_i', '20', '-qp_p', '20', '-pix_fmt', 'yuv420p']
+            elif encoder == 'h264_qsv':
+                ffmpeg_cmd += ['-c:v', 'h264_qsv', '-preset', 'veryfast', '-global_quality', '20', '-look_ahead', '0']
+            elif encoder == 'libopenh264':
+                ffmpeg_cmd += ['-c:v', 'libopenh264', '-pix_fmt', 'yuv420p']
+            else:
+                ffmpeg_cmd += ['-c:v', 'mpeg4', '-q:v', '3']
+            ffmpeg_cmd += ['-movflags', '+faststart', self.output_path]
+            self._ffmpeg_proc = subprocess.Popen(
+                ffmpeg_cmd, stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                startupinfo=startupinfo
+            )
+
         self._capture_thread = threading.Thread(target=self._capture_worker, daemon=True)
         self._capture_thread.start()
 
@@ -122,8 +194,80 @@ class ScreenRecorder:
 
         return True
 
+    def _build_watermark(self):
+        """预渲染水印图层（只调用一次，后续逐帧叠加零开销）"""
+        try:
+            from PIL import Image, ImageDraw, ImageFont
+        except ImportError:
+            print("[Watermark] Pillow 未安装，跳过水印")
+            return
+
+        w, h = self.width, self.height
+        # 水印尺寸约为视频的 1/15 高度
+        font_size = max(12, h // 15)
+        margin = max(20, h // 25)
+
+        # 加载幼圆字体
+        font_paths = [
+            os.path.join(os.environ.get('SystemRoot', r'C:\Windows'), 'Fonts', 'SIMYOU.TTF'),
+            os.path.join(os.environ.get('SystemRoot', r'C:\Windows'), 'Fonts', 'simyou.ttf'),
+        ]
+        font = None
+        for fp in font_paths:
+            if os.path.exists(fp):
+                try:
+                    font = ImageFont.truetype(fp, font_size)
+                    break
+                except:
+                    pass
+        if font is None:
+            font = ImageFont.load_default()
+
+        # 计算文字尺寸
+        tmp = Image.new('RGBA', (1, 1))
+        draw = ImageDraw.Draw(tmp)
+        text = "录屏王"
+        bbox = draw.textbbox((0, 0), text, font=font)
+        tw, th = bbox[2] - bbox[0], bbox[3] - bbox[1]
+
+        # 创建水印图层
+        layer = Image.new('RGBA', (w, h), (0, 0, 0, 0))
+        draw = ImageDraw.Draw(layer)
+        # 水印位置：右下角，留边距
+        x = w - tw - margin
+        y = h - th - margin
+        # 描边（深灰色描边增加对比度）
+        stroke_w = max(2, font_size // 15)
+        for dx in range(-stroke_w, stroke_w + 1):
+            for dy in range(-stroke_w, stroke_w + 1):
+                if dx * dx + dy * dy <= stroke_w * stroke_w:
+                    draw.text((x + dx, y + dy), text, font=font, fill=(0, 0, 0, 160))
+        # 主文字（半透明白色）
+        draw.text((x, y), text, font=font, fill=(255, 255, 255, 140))
+
+        self._wm_overlay = np.array(layer)  # RGBA numpy array
+
+    def _apply_watermark(self, frame):
+        """将预渲染水印叠加到 BGR 帧上"""
+        overlay = self._wm_overlay
+        if overlay is None:
+            return frame
+        # overlay 是 RGBA，frame 是 BGR
+        alpha = overlay[:, :, 3:4].astype(np.float32) / 255.0
+        rgb = overlay[:, :, :3][:, :, ::-1]  # RGBA → BGR
+        blended = (frame.astype(np.float32) * (1.0 - alpha) + rgb.astype(np.float32) * alpha)
+        return blended.astype(np.uint8)
+
     def _capture_worker(self):
         """捕获线程 - 增加帧率同步与补帧逻辑"""
+        # 免费版水印：预渲染一次（失败不影响录制）
+        if self._watermark:
+            try:
+                self._build_watermark()
+            except Exception as e:
+                print(f"[Watermark] 预渲染失败: {e}，跳过水印")
+                self._wm_overlay = None
+
         with mss.mss() as sct:
             x, y, w, h = self.bounds
             region = {"left": x, "top": y, "width": w, "height": h}
@@ -145,6 +289,10 @@ class ScreenRecorder:
                 try:
                     screenshot = sct.grab(region)
                     frame = np.array(screenshot)[:, :, :3]
+
+                    # 免费版水印叠加
+                    if self._wm_overlay is not None:
+                        frame = self._apply_watermark(frame)
 
                     current_time = time.perf_counter()
                     target_count = int((current_time - start_time) * self.fps) + 1
@@ -227,6 +375,9 @@ class RecordController:
         self.record_system = True
         self._audio_capture = None
 
+        # 免费版水印
+        self.free_mode = False
+
         self.on_status_changed = None
         self.on_recording_complete = None
 
@@ -241,6 +392,12 @@ class RecordController:
         try:
             from recorder.audio import preinit_audio
             preinit_audio()
+        except:
+            pass
+        # 同时预探测 FFmpeg 编码器（首次约 1-2s，结果写入磁盘缓存）
+        try:
+            from utils.config import get_resource_path
+            ScreenRecorder._detect_encoder(get_resource_path('ffmpeg'))
         except:
             pass
 
@@ -276,7 +433,7 @@ class RecordController:
 
                 if self.region:
                     output = os.path.join(self.output_dir, f"recording_{timestamp}.mp4")
-                    recorder = ScreenRecorder(self.region, output, self.fps)
+                    recorder = ScreenRecorder(self.region, output, self.fps, watermark=self.free_mode)
                     recorder.start()
                     self.recorders.append(recorder)
                     output_paths.append(output)
@@ -289,7 +446,7 @@ class RecordController:
                         bounds = (mon["left"], mon["top"], mon["width"], mon["height"])
                         output = os.path.join(self.output_dir, f"recording_screen{mon_idx}_{timestamp}.mp4")
 
-                        recorder = ScreenRecorder(bounds, output, self.fps)
+                        recorder = ScreenRecorder(bounds, output, self.fps, watermark=self.free_mode)
                         recorder.start()
                         self.recorders.append(recorder)
                         output_paths.append(output)

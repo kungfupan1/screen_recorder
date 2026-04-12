@@ -4,13 +4,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-录屏王 (Screen Recorder King) - A Windows screen recording application built with PySide6 and qfluentwidgets. Features a modern dark-themed UI with frameless window, fullscreen recording, region selection (freeze-desktop overlay), and multi-monitor recording.
+录屏王 (Screen Recorder King) - A Windows screen recording application built with PySide6 and qfluentwidgets. Features a modern dark-themed UI with frameless window, fullscreen recording, region selection (freeze-desktop overlay), multi-monitor recording, and a free/paid tier system.
 
 **System requirements**: Windows 10/11, Python 3.8+
 
-**Key dependencies**: PySide6, PySide6-Fluent-Widgets (imported as `qfluentwidgets`), mss (screen capture), opencv-python (video encoding), cryptography (license verification), qrcode (QR code generation), requests (API calls)
+**Key dependencies**: PySide6, PySide6-Fluent-Widgets (imported as `qfluentwidgets`), mss (screen capture), ffmpeg (subprocess pipe encoding), Pillow (watermark rendering), cryptography (license verification), qrcode (QR code generation), requests (API calls)
 
-**No test suite** — only `test_coords.py` (coordinate debug utility). No unit tests exist.
+**No test suite** — only `test_coords.py` (coordinate debug utility). No linting or formatting tools configured.
 
 ## Commands
 
@@ -22,8 +22,6 @@ python main.py
 pip install -r requirements.txt
 
 # Build EXE (PyInstaller - produces dist/录屏王/ folder)
-pyinstaller --noconfirm --onedir --windowed --icon "icon.ico" --collect-all PySide6 --name "录屏王" main.py
-# Alternative: use spec file
 pyinstaller 录屏王.spec --clean --noconfirm
 
 # Build full installer (PyInstaller + Inno Setup LZMA2 compression)
@@ -45,7 +43,7 @@ recorder/
   screen_capture.py     # UNUSED - dead code
   video_writer.py       # UNUSED - dead code
 ui/
-  main_window.py        # MainWindow, VideoCard, MonitorSelector, BokehBackground - main application UI
+  main_window.py        # MainWindow, VideoCard, MonitorSelector, BokehBackground, _VipFeatureDialog
   pay_dialog.py         # PayDialog, PlanCard, AgreementDialog, RedeemDialog, BokehBackground (duplicate)
   widgets.py            # Custom widgets: TitleBar, RecordButton, ModeButton, StatusIndicator, TimeDisplay
   styles.py             # Color constants (COLORS dict) + stylesheet templates used by widgets.py
@@ -56,20 +54,26 @@ license/
   cache_manager.py      # Local JSON cache at %LOCALAPPDATA%\录屏王\ (license.json, plans_cache.json)
   api_client.py         # JustPay API client (fetch plans, create order, poll order status, verify online)
 utils/
-  config.py             # sc() DPI scaling function, Config class, DEFAULT_CONFIG, get_resource_path()
+  config.py             # sc() DPI scaling, wsc(size, zoom) window-scaled sizes, Config class, get_resource_path()
 ```
 
 ## Key Technical Details
 
-### DPI Scaling (`sc()` function)
+### DPI & Window Scaling
 
-`utils/config.py` defines `_get_dpi_scale()` which reads system DPI via Win32 API, computes `UI_SCALE = max(dpi / 96.0, 1.0)`. The `sc(size)` function scales any pixel value by this factor. **Every UI file** uses `sc()` for all dimensions — fonts, spacing, widget sizes. The app disables Qt's built-in scaling (`QT_AUTO_SCREEN_SCALE_FACTOR=0`, `QT_ENABLE_HIGHDPI_SCALING=0`) and handles it manually via `sc()`.
+Two scaling functions in `utils/config.py`:
+- **`sc(size)`** — DPI-only scaling: `int(size * UI_SCALE)` where `UI_SCALE = max(dpi / 96.0, 1.0)`. Used for fixed elements (title bar, non-resizable dialogs).
+- **`wsc(size, zoom)`** — DPI + window zoom: `max(1, int(size * UI_SCALE * zoom))`. Used for all widgets that resize with the main window.
+
+The app disables Qt's built-in scaling (`QT_AUTO_SCREEN_SCALE_FACTOR=0`, `QT_ENABLE_HIGHDPI_SCALING=0`) and uses raw physical pixels. `main.py` sets `SetProcessDpiAwareness(2)` (per-monitor DPI aware v2) before Qt init. `area_selector.py` captures the full virtual desktop (`monitors[0]`) with mss, then creates a frameless topmost window over it. All coordinates are **absolute physical coordinates** relative to the virtual desktop origin.
 
 ### Recording Pipeline (controller.py)
 
 `RecordController` manages one or more `ScreenRecorder` instances. Each `ScreenRecorder` runs **two threads**:
 - **`_capture_worker`**: Captures frames using `mss` (creates its own `mss.mss()` per thread — see pitfalls), pushes to a `Queue(maxsize=120)`
-- **`_write_worker`**: Pulls frames from queue and writes via `cv2.VideoWriter`
+- **`_write_worker`**: Pulls frames from queue and writes via **FFmpeg subprocess pipe** (raw BGR frames → ffmpeg stdin)
+
+**Video encoding** uses FFmpeg (not cv2.VideoWriter) piped via subprocess. Encoder auto-detection probes in order: `h264_nvenc` → `h264_amf` → `h264_qsv` → `libopenh264` → `mpeg4` (fallback). Detection result is cached in memory (`_cached_encoder`) and persisted to disk (`%LOCALAPPDATA%\录屏王\encoder_cache.json`). If a cached encoder fails at runtime (e.g. GPU changed), the cache is cleared and detection re-runs automatically.
 
 Frame synchronization uses `time.perf_counter()`:
 - `target_count = int((current_time - start_time) * fps) + 1`
@@ -78,31 +82,36 @@ Frame synchronization uses `time.perf_counter()`:
 
 Pause/resume at the `ScreenRecorder` level tracks pause duration to adjust `start_time`, ensuring continuous timeline.
 
-### DPI/Coordinate System
+### Free/Paid Tier System
 
-- `main.py` sets `SetProcessDpiAwareness(2)` (per-monitor DPI aware v2) before Qt init
-- `QT_AUTO_SCREEN_SCALE_FACTOR=0` and `QT_ENABLE_HIGHDPI_SCALING=0` — Qt scaling disabled, app uses raw physical pixels
-- `area_selector.py` captures the full virtual desktop (`monitors[0]`) with mss, then creates a frameless topmost window over it. User draws selection on this frozen screenshot.
-- All coordinates are **absolute physical coordinates** relative to the virtual desktop origin
+- **Free mode**: `RecordController.free_mode = True` enables watermark on recordings. Watermark is pre-rendered once via Pillow (`_build_watermark()`) into an RGBA overlay, then alpha-blended per frame via numpy (`_apply_watermark()`) with minimal overhead.
+- **Region recording lock**: Free users see a grayed-out "区域录制" button with VIP badge. The button is NOT disabled — clicking it shows `_VipFeatureDialog` prompting subscription. `MainWindow._apply_locked_style()` controls the visual lock state via the `"freeLocked"` property.
+- **Activation path**: `MainWindow._on_activated()` removes free-mode restrictions: clears watermark flag, restores region button styling, removes VIP badge.
 
 ### UI/Controller Communication
 
 - Callback pattern: `RecordController.on_status_changed` and `on_recording_complete` callbacks
 - `MainWindow` connects these to update status indicator, time display, and video card list
-- **Pause bug**: `_toggle_pause` in MainWindow directly sets `self.recorder.is_paused` flag and stops/starts the display timer, but does NOT call `RecordController.pause()/resume()`. This means the `ScreenRecorder` threads keep capturing frames — only the time display freezes. The controller's `pause()` method would propagate to each `ScreenRecorder.pause()` which sets `_pause_event` to actually stop capture, but this path is never called from the UI.
+- Pause/resume calls `self.recorder.pause()` / `self.recorder.resume()` which propagates to each `ScreenRecorder`'s `_pause_event`
 - Video thumbnails generated asynchronously via `QTimer.singleShot(100, ...)` after VideoCard creation
+
+### Window Resize
+
+`MainWindow` supports system-level resize via `nativeEvent`:
+- `WM_NCHITTEST` for edge detection (uses `self._card.geometry()` for hit testing)
+- `WM_SIZING` for aspect ratio lock
+- `WM_GETMINMAXINFO` for min/max tracking
+- `update_ui_scale(zoom)` updates all widget sizes/fonts in place — no destroy/rebuild
+- Each custom widget has `update_zoom(zoom)` method
+- `BokehBackground` uses normalized coordinates (0.0~1.0) for particles — zero-cost resize
+- Default startup: sc(900) height, width = height * (670/1260), zoom starts at ~0.71
+- After `update_ui_scale`, free-tier locked buttons need `_apply_locked_style()` re-applied since `update_zoom` resets their stylesheet
 
 ### Multi-Monitor Support
 
 - `RecordController.get_monitors()` returns `sct.monitors[1:]` (index 0 is virtual desktop)
 - Each selected monitor gets its own `ScreenRecorder` instance
 - Recording multiple monitors produces separate video files (`recording_screen{idx}_{timestamp}.mp4`)
-
-### Video Encoding
-
-- OpenCV `cv2.VideoWriter` with `mp4v` codec
-- Dimensions forced to even numbers (odd dimensions reduced by 1)
-- Default FPS: 30, output format: MP4
 
 ### UI Framework
 
@@ -116,23 +125,24 @@ Pause/resume at the `ScreenRecorder` level tracks pause duration to adjust `star
 ### Build/Packaging
 
 - PyInstaller with `--collect-all PySide6` bundles all Qt dependencies
-- Spec file (`录屏王.spec`) declares `hiddenimports` for license modules, qrcode, and cryptography — needed for PyInstaller to find them
+- Spec file (`录屏王.spec`) uses `collect_all('PySide6')` to auto-discover PySide6 hidden imports
+- Explicit `hiddenimports` for Pillow (`PIL.*`) — needed for watermark rendering
+- **Note**: Spec file does NOT bundle `ffmpeg.exe` in datas — it must be placed alongside the exe manually or via Inno Setup (`build.bat` handles this)
 - `console=False` for windowed exe, icon from `icon.ico`
 - `build.bat` chains PyInstaller → Inno Setup (LZMA2/ultra64 compression)
-- `installer.iss` creates Start Menu shortcut, optional Desktop shortcut, Chinese UI
 - Resource loading: `utils/config.py` has `get_resource_path()` that resolves to `sys._MEIPASS` when frozen
 
 ## Common Pitfalls
 
 1. **Never share mss instance across threads** — causes `_thread._local object has no attribute 'srcdc'` error. Each `_capture_worker` creates its own `with mss.mss() as sct:`
 2. **Frame rate drift** — use `time.perf_counter()` based timing, never simple `sleep(1/fps)`
-3. **Odd dimensions** — OpenCV VideoWriter requires even width/height
-4. **DPI scaling** — Windows scaling causes coordinate mismatch; the app disables Qt scaling and uses physical coordinates. Always use `sc()` for pixel values in UI code.
+3. **Odd dimensions** — FFmpeg pipe requires even width/height
+4. **DPI scaling** — Always use `sc()` for fixed-size elements and `wsc(size, zoom)` for window-scalable elements. Never hardcode pixel values.
 5. **Dead code** — `recorder/screen_capture.py` and `recorder/video_writer.py` are unused; keep them out of refactor scope. (`ui/styles.py` IS used by `widgets.py` — do not delete it.)
-6. **PyInstaller hidden imports** — license modules (`license.*`), `qrcode`, and `cryptography` must be listed in `hiddenimports` in the spec file or they won't be bundled
-7. **Pause doesn't actually pause recording** — see "Pause bug" in UI/Controller Communication section
-8. **qfluentwidgets `setTheme(Theme.DARK)` cascading** — calling this injects global CSS that can make child widgets invisible (e.g. black text on black background). Diagnose from the top-level window down; use `background: transparent` on intermediate containers and object-name selectors to override.
-9. **BokehBackground duplication** — exists in both `main_window.py` and `pay_dialog.py`. Fixes to one must be manually applied to the other.
+6. **PyInstaller hidden imports** — Pillow modules (`PIL.*`) must be listed in `hiddenimports` in the spec file or they won't be bundled
+7. **qfluentwidgets `setTheme(Theme.DARK)` cascading** — calling this injects global CSS that can make child widgets invisible (e.g. black text on black background). Diagnose from the top-level window down; use `background: transparent` on intermediate containers and object-name selectors to override.
+8. **BokehBackground duplication** — exists in both `main_window.py` and `pay_dialog.py`. Fixes to one must be manually applied to the other.
+9. **Encoder cache invalidation** — If a user changes GPU, the cached encoder name may be stale. The `_start` method handles this by detecting FFmpeg immediate exit and re-probing.
 
 ## License/Payment System
 
@@ -149,11 +159,12 @@ Videos saved to `~/Videos/录屏王/` (user's Videos folder)
 
 ## Keyboard Shortcuts
 
-Handled in `ui/main_window.py` via `keyPressEvent`:
-- **F9**: Toggle recording (start/stop)
-- **F10**: Pause/resume recording
-- **ESC**: Exit application (only when not recording)
+Handled in `MainWindow.__init__` via `QShortcut` (works regardless of focus):
+- **Ctrl+F9**: Toggle recording (start/stop)
+- **Ctrl+F10**: Pause/resume recording
+- **Ctrl+ESC**: Exit application (only when not recording)
 
 ## Note
 
-`README.md` is outdated — it says "录屏大师" and references `build.spec` (neither match current code). The canonical source for project info is this file.
+- `README.md` is outdated — it says "录屏大师" and references `build.spec` (neither match current code). The canonical source for project info is this file.
+- `installer.iss` installs to `{autopf}\ScreenRecorder\` (not `录屏王`). Publisher is `kungfupan/白雪歌`.

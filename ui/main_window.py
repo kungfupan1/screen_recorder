@@ -16,7 +16,7 @@ from PySide6.QtWidgets import (
     QSizePolicy, QDialog  # <--- 必须加上这个
 )
 from PySide6.QtCore import Qt, QTimer, QPoint, QPointF, QRect, Signal
-from PySide6.QtGui import QPixmap, QImage, QColor, QPainter, QRadialGradient, QPen, QBrush
+from PySide6.QtGui import QPixmap, QImage, QColor, QPainter, QRadialGradient, QPen, QBrush, QShortcut, QKeySequence
 
 import cv2
 
@@ -446,6 +446,87 @@ class _TimeLimitDialog(QDialog):
         self.accept()
 
 
+# ────────────────── 付费功能提示弹窗 ──────────────────
+class _VipFeatureDialog(QDialog):
+    """点击锁定功能时的提示弹窗"""
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        z = 1.0
+        self._go_subscribe = False
+        self.setWindowFlags(Qt.WindowType.FramelessWindowHint | Qt.WindowType.Dialog)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+
+        w, h = wsc(400, z), wsc(200, z)
+        self.setFixedSize(w, h)
+
+        bg = QFrame(self)
+        bg.setGeometry(0, 0, w, h)
+        bg.setObjectName("VipFeatureBg")
+        bg.setStyleSheet(
+            "QFrame#VipFeatureBg { background-color: #1a1a2e; border-radius: 12px; "
+            "border: 1px solid rgba(255, 255, 255, 0.08); }")
+        outer = QVBoxLayout(bg)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
+
+        # 标题
+        tb = QFrame()
+        tb.setFixedHeight(wsc(44, z))
+        tb.setStyleSheet("background: transparent;")
+        tbl = QHBoxLayout(tb)
+        tbl.setContentsMargins(wsc(20, z), 0, wsc(10, z), 0)
+        tt = QLabel("🔒 付费功能")
+        tt.setStyleSheet("color: #ffc107; font-size: %dpx; font-weight: bold; background: transparent;" % wsc(18, z))
+        tbl.addWidget(tt)
+        tbl.addStretch()
+        outer.addWidget(tb)
+
+        # 正文
+        body = QWidget()
+        body.setStyleSheet("background: transparent;")
+        bl = QVBoxLayout(body)
+        bl.setContentsMargins(wsc(24, z), 0, wsc(24, z), wsc(24, z))
+        bl.setSpacing(wsc(16, z))
+
+        msg = QLabel("区域录制为会员专属功能，开通会员即可解锁。")
+        msg.setWordWrap(True)
+        msg.setStyleSheet("color: #a0a0a0; font-size: %dpx; background: transparent;" % wsc(14, z))
+        bl.addWidget(msg)
+        bl.addStretch()
+
+        btn_row = QHBoxLayout()
+        btn_row.setSpacing(wsc(12, z))
+        sub_btn = QPushButton("👑 去订阅")
+        sub_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        sub_btn.setFixedSize(wsc(130, z), wsc(38, z))
+        sub_btn.setStyleSheet(
+            "QPushButton { background-color: #ffc107; color: #1a1a2e; border: none; "
+            "border-radius: 6px; font-weight: bold; font-size: %dpx; } "
+            "QPushButton:hover { background-color: #ffda6a; }" % wsc(14, z))
+        sub_btn.clicked.connect(self._on_subscribe)
+        btn_row.addWidget(sub_btn)
+        btn_row.addStretch()
+        ok_btn = QPushButton("确认")
+        ok_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        ok_btn.setFixedSize(wsc(100, z), wsc(38, z))
+        ok_btn.setStyleSheet(
+            "QPushButton { background-color: #3a3a5a; color: #a0a0a0; border: none; "
+            "border-radius: 6px; font-weight: bold; font-size: %dpx; } "
+            "QPushButton:hover { background-color: #4a4a6a; color: #ffffff; }" % wsc(14, z))
+        ok_btn.clicked.connect(self.accept)
+        btn_row.addWidget(ok_btn)
+        bl.addLayout(btn_row)
+        outer.addWidget(body)
+
+        if parent:
+            pg = parent.geometry()
+            self.move(pg.x() + (pg.width() - w) // 2, pg.y() + (pg.height() - h) // 2)
+
+    def _on_subscribe(self):
+        self._go_subscribe = True
+        self.accept()
+
+
 # ────────────────── 红色呼吸光效覆层 ──────────────────
 class _GlowOverlay(QWidget):
     """红色呼吸光效 - 覆盖在卡片上方，边缘发光"""
@@ -539,6 +620,15 @@ class MainWindow(QMainWindow):
         self._video_ready.connect(self._on_complete)
 
         self._setup_ui()
+
+        # 全局快捷键（QShortcut 不受焦点影响，任何控件获焦都能触发）
+        QShortcut(QKeySequence("Ctrl+F9"), self, activated=self._toggle_record)
+        QShortcut(QKeySequence("Ctrl+F10"), self, activated=self._toggle_pause)
+        QShortcut(QKeySequence("Ctrl+Esc"), self, activated=self._esc_quit)
+
+    def _esc_quit(self):
+        if not self.recorder.is_recording:
+            self.close()
 
     # ──────────── nativeEvent: 系统级缩放 + 拖拽 ────────────
 
@@ -669,6 +759,9 @@ class MainWindow(QMainWindow):
         # 模式按钮
         self.fullscreen_btn.update_zoom(z)
         self.region_btn.update_zoom(z)
+        # 缩放后重新应用锁定样式（update_zoom 会重置为蓝色）
+        if self.region_btn.property("freeLocked"):
+            self._apply_locked_style(self.region_btn)
         self._mode_layout.setSpacing(wsc(18, z))
 
         # 音频按钮
@@ -816,10 +909,11 @@ class MainWindow(QMainWindow):
         self._mode_layout.addWidget(self.fullscreen_btn)
 
         self.region_btn = ModeButton("区域录制", "📐", zoom=z)
-        self.region_btn.clicked.connect(lambda: self._set_mode("region"))
-        # 免费版：禁用区域录制 + VIP角标
+        self.region_btn.clicked.connect(self._on_region_clicked)
+        # 免费版：视觉灰色 + VIP角标（不禁用，保留点击能力）
         if not self._license_activated:
-            self.region_btn.setEnabled(False)
+            self.region_btn.setProperty("freeLocked", True)
+            self._apply_locked_style(self.region_btn)
             self.region_btn.set_vip_badge(True)
         self._mode_layout.addWidget(self.region_btn)
         ct.addLayout(self._mode_layout)
@@ -952,7 +1046,7 @@ class MainWindow(QMainWindow):
         ct.addWidget(self._video_wrapper)
 
         # 底部提示
-        self._bottom_hint = QLabel("F9 开始/停止  |  F10 暂停/继续  |  ESC 退出")
+        self._bottom_hint = QLabel("Ctrl+F9 开始/停止  |  Ctrl+F10 暂停/继续  |  Ctrl+ESC 退出")
         self._bottom_hint.setStyleSheet("color: #808080; font-size: {}px; background: transparent;".format(wsc(20, z)))
         self._bottom_hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
         ct.addWidget(self._bottom_hint)
@@ -996,6 +1090,30 @@ class MainWindow(QMainWindow):
 
     # ──────────── 业务逻辑（全盘保留）────────────
 
+    @staticmethod
+    def _apply_locked_style(btn):
+        """给按钮应用灰色锁定外观（不禁用，保留点击能力）"""
+        z = btn._zoom
+        btn.setStyleSheet(f"""
+            QPushButton {{
+                background-color: #3a3a4a;
+                color: #6a6a7a;
+                border: none;
+                border-radius: {wsc(12, z)}px;
+                padding: {wsc(12, z)}px {wsc(20, z)}px;
+                font-size: {wsc(20, z)}px;
+            }}
+        """)
+
+    def _on_region_clicked(self):
+        if not self._license_activated:
+            dlg = _VipFeatureDialog(self)
+            dlg.exec()
+            if dlg._go_subscribe:
+                self._show_payment_dialog()
+            return
+        self._set_mode("region")
+
     def _set_mode(self, mode):
         self.record_mode = mode
         self.fullscreen_btn.setChecked(mode == "fullscreen")
@@ -1025,6 +1143,8 @@ class MainWindow(QMainWindow):
         # 设置音频开关
         self.recorder.record_mic = self.mic_check.isChecked()
         self.recorder.record_system = self.sys_check.isChecked()
+        # 免费版水印
+        self.recorder.free_mode = not self._license_activated
 
         if self.record_mode == "region":
             self.info_label.setText("请在屏幕上拖拽选择录制区域...")
@@ -1102,6 +1222,9 @@ class MainWindow(QMainWindow):
         self.stop_btn.setEnabled(False)
         self.fullscreen_btn.setEnabled(True)
         self.region_btn.setEnabled(True)
+        # 付费用户：恢复蓝色样式；免费用户：恢复灰色锁定样式
+        if not self.region_btn.property("freeLocked"):
+            self.region_btn._apply_style()
         self.monitor_selector.setEnabled(True)
         # 区域录制恢复时重新禁用显示器勾选
         if self.record_mode == "region":
@@ -1122,12 +1245,12 @@ class MainWindow(QMainWindow):
 
     def _toggle_pause(self):
         if self.recorder.is_paused:
-            self.recorder.is_paused = False
+            self.recorder.resume()
             self.pause_btn.setText("⏸  暂停")
             self._update_status("recording", "录制中")
             self.timer.start(100)
         else:
-            self.recorder.is_paused = True
+            self.recorder.pause()
             self.pause_btn.setText("▶  继续")
             self._update_status("paused", "已暂停")
             self.timer.stop()
@@ -1189,8 +1312,9 @@ class MainWindow(QMainWindow):
         # 移除免费版标识
         self._title_bar.set_version_label(False)
         self.time_display.set_free_mode(False)
-        # 区域录制按钮恢复
-        self.region_btn.setEnabled(True)
+        # 区域录制按钮恢复：移除锁定样式 + VIP角标
+        self.region_btn.setProperty("freeLocked", False)
+        self.region_btn._apply_style()
         self.region_btn.set_vip_badge(False)
         self._start_record()
 
@@ -1325,13 +1449,3 @@ class MainWindow(QMainWindow):
             self.hide()  # 【核心修复】：先瞬间隐藏主窗口！
             self.recorder.close()  # 这里卡住 1 秒也没关系，因为界面已经秒退了
             event.accept()
-
-    def keyPressEvent(self, event):
-        if event.key() == Qt.Key.Key_F9:
-            self._toggle_record()
-        elif event.key() == Qt.Key.Key_F10:
-            if self.recorder.is_recording:
-                self._toggle_pause()
-        elif event.key() == Qt.Key.Key_Escape:
-            if not self.recorder.is_recording:
-                self.close()

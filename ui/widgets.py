@@ -109,7 +109,7 @@ class ModeButton(QPushButton):
         self.setStyleSheet(f"""
             QPushButton {{
                 background-color: {COLORS['bg_card']};
-                color: {COLORS['text_secondary']};
+                color: #c8d6e5;
                 border: none;
                 border-radius: {wsc(12, z)}px;
                 padding: {wsc(12, z)}px {wsc(20, z)}px;
@@ -123,7 +123,6 @@ class ModeButton(QPushButton):
                 background-color: qlineargradient(x1:0, y1:0, x2:1, y2:1,
                     stop:0 {COLORS['bg_card']}, stop:1 #1a4a80);
                 color: {COLORS['success']};
-                border-color: {COLORS['success']};
             }}
             QPushButton:disabled {{
                 background-color: #3a3a4a;
@@ -474,7 +473,7 @@ class AudioToggleButton(QPushButton):
             QPushButton {{
                 background: transparent;
                 color: #666666;
-                border: none;
+                border: none;·
                 font-size: {wsc(23, z)}px;
                 font-family: "Microsoft YaHei", "Segoe UI", sans-serif;
                 padding: 0px;

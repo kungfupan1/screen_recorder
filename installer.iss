@@ -4,10 +4,10 @@
 ; === 软件基本信息 ===
 AppName=录屏王
 AppVersion=1.0.0
-AppPublisher=你的名字/工作室名称
+AppPublisher=kungfupan/白雪歌
 AppCopyright=Copyright (C) 2024
 ; 默认安装到 C:\Program Files\录屏王
-DefaultDirName={autopf}\录屏王
+DefaultDirName={autopf}\ScreenRecorder\
 ; 在开始菜单里的文件夹名称
 DefaultGroupName=录屏王
 
@@ -30,9 +30,6 @@ UninstallDisplayIcon={app}\录屏王.exe
 ; 必须具备管理员权限才能安装
 PrivilegesRequired=admin
 
-[Languages]
-; 指定安装界面的语言为简体中文（如果你的 Inno 没装中文包，运行时界面可能会降级为英文，但不影响使用）
-Name: "chinesesimp"; MessagesFile: "compiler:Languages\ChineseSimplified.isl"
 
 [Tasks]
 ; 提示用户是否创建桌面快捷方式
