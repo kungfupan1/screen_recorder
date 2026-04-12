@@ -80,13 +80,14 @@ def _should_remove(name):
 a.binaries = [b for b in a.binaries if not _should_remove(os.path.basename(b[0]))]
 
 # 过滤 a.datas：移除黑名单模块文件 + 排除目录
+# a.datas 是 TOC 格式: (dest_name, source_path, type)
 def _should_remove_data(entry):
-    src, dst = entry[0], entry[1]
-    name = os.path.basename(src)
+    dest_name = entry[0]  # 目标路径，如 "PySide6/include/xxx.h"
+    name = os.path.basename(dest_name)
     if _should_remove(name):
         return True
-    # 检查排除目录 (dst 形如 "PySide6/include" 或 "PySide6/include/xxx.h")
-    parts = dst.replace('\\', '/').split('/')
+    # 检查排除目录 (dest_name 形如 "PySide6/include/xxx.h")
+    parts = dest_name.replace('\\', '/').split('/')
     if len(parts) >= 2 and parts[0] == 'PySide6' and parts[1] in _BLACKLIST_DATAS_DIRS:
         return True
     return False
