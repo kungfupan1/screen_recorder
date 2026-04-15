@@ -15,13 +15,16 @@ from PySide6.QtWidgets import (
     QPushButton, QFrame, QScrollArea, QFileDialog, QCheckBox, QMessageBox, QMenu,
     QSizePolicy, QDialog  # <--- 必须加上这个
 )
-from PySide6.QtCore import Qt, QTimer, QPoint, QPointF, QRect, Signal
-from PySide6.QtGui import QPixmap, QImage, QColor, QPainter, QRadialGradient, QPen, QBrush, QShortcut, QKeySequence
+from PySide6.QtCore import Qt, QTimer, QPoint, QPointF, QRect, QSize, Signal
+from PySide6.QtGui import QPixmap, QImage, QColor, QPainter, QRadialGradient, QPen, QBrush, QShortcut, QKeySequence, QFont, QIcon
 
 import cv2
 
 from ui.widgets import RecordButton, ModeButton, StatusIndicator, TimeDisplay, TitleBar, AudioToggleButton, AudioWaveWidget, DarkConfirmDialog
 from ui.styles import COLORS, BUTTON_STYLES
+from qfluentwidgets import RoundMenu, Action, FluentIcon as FIF
+from qfluentwidgets.components.widgets.menu import CustomMenuStyle
+from qfluentwidgets.common.icon import FluentIconEngine
 from recorder.controller import RecordController
 from recorder.area_selector import select_area
 from license.activation import check_activation
@@ -306,6 +309,93 @@ class VideoCard(QFrame):
         if event.button() == Qt.MouseButton.LeftButton:
             os.startfile(self.video_path)
         super().mousePressEvent(event)
+
+    def contextMenuEvent(self, event):
+        z = self._zoom
+        item_h = wsc(56, z)
+        menu = RoundMenu(parent=self)
+
+        # 1. 在添加任何 item 之前，先设好 itemHeight 和字体
+        #    _adjustItemText 用 self.itemHeight 写入 sizeHint，用 view.fontMetrics 算宽度
+        menu.itemHeight = item_h
+        menu.view._itemHeight = item_h
+        menu_font = QFont("Microsoft YaHei")
+        menu_font.setPixelSize(wsc(36, z))
+        menu.view.setFont(menu_font)
+
+        # 2. 放大图标
+        icon_size = wsc(22, z)
+        menu.view.setIconSize(QSize(icon_size, icon_size))
+        menu.setStyle(CustomMenuStyle(iconSize=icon_size))
+
+        # 3. 深色主题样式（覆盖默认白色）
+        menu.view.setStyleSheet("""
+            MenuActionListWidget {
+                border: 1px solid rgba(255, 255, 255, 0.08);
+                border-radius: 9px;
+                background-color: #1e1e32;
+                outline: none;
+            }
+            MenuActionListWidget::item {
+                padding-left: 10px;
+                padding-right: 10px;
+                border-radius: 5px;
+                margin-left: 6px;
+                margin-right: 6px;
+                border: none;
+                color: #d0d0d0;
+            }
+            MenuActionListWidget::item:disabled {
+                color: rgba(255, 255, 255, 80);
+            }
+            MenuActionListWidget::item:hover {
+                background-color: rgba(0, 217, 255, 0.12);
+                color: #ffffff;
+            }
+            MenuActionListWidget::item:selected {
+                background-color: rgba(0, 217, 255, 0.08);
+                color: #ffffff;
+            }
+            MenuActionListWidget::item:selected:active {
+                background-color: rgba(0, 217, 255, 0.18);
+            }
+        """)
+
+        # 4. 创建白色图标（reverse=True 让 FluentIconEngine 取白色 svg）
+        def _white_icon(fluent_icon):
+            return QIcon(FluentIconEngine(fluent_icon, reverse=True))
+
+        # 5. 添加菜单项（_adjustItemText 此时已用正确的 itemHeight 和 fontMetrics）
+        menu.addAction(Action(_white_icon(FIF.PLAY), "播放", triggered=lambda: os.startfile(self.video_path)))
+        menu.addAction(Action(_white_icon(FIF.SAVE), "另存为...", triggered=self._save_as))
+        menu.addAction(Action(_white_icon(FIF.FOLDER), "打开所在文件夹", triggered=self._open_folder))
+        menu.addSeparator()
+        menu.addAction(Action(_white_icon(FIF.DELETE), "删除", triggered=self._delete_file))
+
+        menu.exec(event.globalPos())
+
+    def _save_as(self):
+        filename = os.path.basename(self.video_path)
+        desktop = os.path.join(os.path.expanduser("~"), "Desktop")
+        dst, _ = QFileDialog.getSaveFileName(self, "另存为", os.path.join(desktop, filename), "视频文件 (*.mp4 *.mkv *.avi);;所有文件 (*)")
+        if dst:
+            try:
+                shutil.copy2(self.video_path, dst)
+            except Exception as e:
+                QMessageBox.warning(self, "保存失败", str(e))
+
+    def _open_folder(self):
+        os.startfile(os.path.dirname(self.video_path))
+
+    def _delete_file(self):
+        dlg = DarkConfirmDialog("确定要删除这个文件吗？", parent=self.window())
+        if dlg.exec() == QDialog.DialogCode.Accepted:
+            try:
+                os.remove(self.video_path)
+                self.setParent(None)
+                self.deleteLater()
+            except Exception:
+                pass
 
     def enterEvent(self, event):
         self.raise_()
@@ -974,7 +1064,7 @@ class MainWindow(QMainWindow):
         # 视频列表标题行：标签 + 文件夹按钮
         video_header = QHBoxLayout()
         video_header.setContentsMargins(0, 0, 0, 0)
-        self._video_label = QLabel("已录制文件（点击另存为）")
+        self._video_label = QLabel("已录制文件")
         self._video_label.setStyleSheet("color: #a0a0a0; font-size: {}px; font-weight: bold; background: transparent;".format(wsc(22, z)))
         video_header.addWidget(self._video_label)
         video_header.addStretch()
@@ -1316,7 +1406,6 @@ class MainWindow(QMainWindow):
         self.region_btn.setProperty("freeLocked", False)
         self.region_btn._apply_style()
         self.region_btn.set_vip_badge(False)
-        self._start_record()
 
     def _on_monitor_changed(self):
         """显示器勾选变化时，自动切换按钮文字"""

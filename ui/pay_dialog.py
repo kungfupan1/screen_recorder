@@ -520,6 +520,91 @@ class RedeemDialog(QWidget):
         self._drag_pos = None
 
 
+# ────────────────── 关于弹窗 ──────────────────
+class AboutDialog(QWidget):
+    def __init__(self, zoom=1.0, parent=None):
+        super().__init__(parent)
+        z = zoom
+        self.setWindowFlags(Qt.WindowType.FramelessWindowHint | Qt.WindowType.Dialog)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        self._drag_pos = None
+
+        font_xs = wsc(12, z)
+        font_sm = wsc(13, z)
+        font_md = wsc(15, z)
+
+        w, h = wsc(420, z), wsc(280, z)
+        self.setFixedSize(w, h)
+
+        self._bg_frame = QFrame(self)
+        self._bg_frame.setGeometry(0, 0, w, h)
+        self._bg_frame.setObjectName("AboutBg")
+        self._bg_frame.setStyleSheet(
+            "QFrame#AboutBg { background-color: #1a1a2e; border-radius: 12px; border: 1px solid rgba(255, 255, 255, 0.08); }")
+        outer = QVBoxLayout(self._bg_frame)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
+
+        # 标题栏
+        tb = QFrame()
+        tb.setFixedHeight(wsc(40, z))
+        tb.setStyleSheet("background: transparent;")
+        tbl = QHBoxLayout(tb)
+        tbl.setContentsMargins(wsc(16, z), 0, wsc(10, z), 0)
+        tt = QLabel("关于录屏王")
+        tt.setStyleSheet("color: #ffffff; font-size: %dpx; font-weight: bold; background: transparent;" % font_md)
+        tbl.addWidget(tt)
+        tbl.addStretch()
+        cb = TransparentToolButton(FIF.CLOSE, self)
+        cb.setFixedSize(wsc(34, z), wsc(34, z))
+        cb.clicked.connect(self.close)
+        tbl.addWidget(cb)
+        outer.addWidget(tb)
+
+        # 内容区
+        body = QWidget()
+        body.setStyleSheet("background: transparent;")
+        bl = QVBoxLayout(body)
+        bl.setContentsMargins(wsc(24, z), wsc(14, z), wsc(24, z), wsc(24, z))
+        bl.setSpacing(wsc(10, z))
+
+        info_items = [
+            ("开发者", "汕头市潮南区白雪歌软件开发服务中心"),
+            ("客服QQ", "3772591697"),
+            ("客服邮箱", "kungfupan1@gmail.com"),
+        ]
+        for label_text, value_text in info_items:
+            row = QVBoxLayout()
+            row.setContentsMargins(0, 0, 0, 0)
+            row.setSpacing(wsc(2, z))
+            lbl = QLabel(label_text)
+            lbl.setStyleSheet("color: #888888; font-size: %dpx; background: transparent;" % font_xs)
+            row.addWidget(lbl)
+            val = QLabel(value_text)
+            val.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+            val.setStyleSheet("color: #ffffff; font-size: %dpx; background: transparent;" % font_sm)
+            row.addWidget(val)
+            bl.addLayout(row)
+
+        bl.addStretch()
+        outer.addWidget(body)
+
+        if parent:
+            pg = parent.geometry()
+            self.move(pg.x() + (pg.width() - w) // 2, pg.y() + (pg.height() - h) // 2)
+
+    def mousePressEvent(self, e):
+        if e.button() == Qt.MouseButton.LeftButton:
+            self._drag_pos = e.globalPosition().toPoint() - self.frameGeometry().topLeft()
+
+    def mouseMoveEvent(self, e):
+        if self._drag_pos and e.buttons() & Qt.MouseButton.LeftButton:
+            self.move(e.globalPosition().toPoint() - self._drag_pos)
+
+    def mouseReleaseEvent(self, e):
+        self._drag_pos = None
+
+
 # ────────────────── 主支付对话框 ──────────────────
 class PayDialog(QWidget):
     payment_success = Signal()
@@ -657,7 +742,7 @@ class PayDialog(QWidget):
 
         # 放大菜单字体
         menu_font = QFont("Microsoft YaHei")
-        menu_font.setPixelSize(wsc(24, z))
+        menu_font.setPixelSize(wsc(64, z))
         self._more_menu.setFont(menu_font)
 
         redeem_action = Action(FIF.TAG, "兑换码激活", triggered=self._open_redeem)
@@ -796,19 +881,15 @@ class PayDialog(QWidget):
             perks_layout.addWidget(box)
         bottom_lay.addLayout(perks_layout)
 
-        svc_row = QHBoxLayout()
-        svc_row.addStretch()
-        svc = QLabel("客服微信: 13450445253")
-        svc.setStyleSheet("color: #555555; font-size: %dpx; background: transparent;" % font_xs)
-        svc_row.addWidget(svc)
-        cp = QPushButton("复制")
-        cp.setFixedSize(wsc(40, z), wsc(22, z))
-        cp.setCursor(Qt.CursorShape.PointingHandCursor)
-        cp.setStyleSheet(
-            "QPushButton { background-color: #0f3460; color: #00d9ff; border: none; border-radius: 3px; padding: 0px; font-family: 'Microsoft YaHei'; font-size: %dpx; } QPushButton:hover { background-color: #00d9ff; color: #1a1a2e; }" % font_xs)
-        cp.clicked.connect(lambda: QApplication.clipboard().setText("13450445253"))
-        svc_row.addWidget(cp)
-        bottom_lay.addLayout(svc_row)
+        about_row = QHBoxLayout()
+        about_row.addStretch()
+        about_label = QLabel(
+            "<a href='#' style='color: #555555; text-decoration: none; font-size: %dpx;'>关于我们</a>" % font_sm)
+        about_label.setStyleSheet("background: transparent;")
+        about_label.setCursor(Qt.CursorShape.PointingHandCursor)
+        about_label.linkActivated.connect(self._open_about)
+        about_row.addWidget(about_label)
+        bottom_lay.addLayout(about_row)
 
         main_layout.addWidget(bottom)
 
@@ -1109,6 +1190,10 @@ class PayDialog(QWidget):
     def _open_redeem(self):
         dlg = RedeemDialog(zoom=self._zoom, parent=self)
         dlg.activate_success.connect(self._on_success)
+        dlg.show()
+
+    def _open_about(self):
+        dlg = AboutDialog(zoom=self._zoom, parent=self)
         dlg.show()
 
     def _open_agreement(self):
