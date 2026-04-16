@@ -378,6 +378,9 @@ class RecordController:
         # 免费版水印
         self.free_mode = False
 
+        # 保存中标志（防止保存未完成时开始新录制）
+        self._saving = False
+
         self.on_status_changed = None
         self.on_recording_complete = None
 
@@ -520,37 +523,61 @@ class RecordController:
         if not self.is_recording:
             return []
 
-        # 1. 停止音频采集 (返回 {"mic": "path", "sys": "path"} 字典)
+        # 1. 停止音频采集
         audio_paths = {}
         if self._audio_capture:
             audio_paths = self._audio_capture.stop()
             self._audio_capture = None
 
-        # 2. 停止视频录制
+        # 2. 信号通知所有录制器停止（瞬间完成，不阻塞）
         for recorder in self.recorders:
-            frames = recorder.stop()
-            print(f"录制完成: {frames} 帧")
+            recorder._stop_event.set()
+            recorder._pause_event.clear()
 
         self.is_recording = False
         self.is_paused = False
+        self._saving = True
 
         output_paths = [r.output_path for r in self.recorders]
+        recorders_snapshot = list(self.recorders)
         self.recorders = []
 
         if self.on_status_changed:
             self.on_status_changed("stopped")
 
-        # 3. 合并音频到视频或生成纯音频文件 (在后台线程执行，不阻塞 UI)
-        if audio_paths:
-            if output_paths:
-                # 视频 + 音频合并
-                def _do_merge(paths, apaths):
+        # 3. 后台清理：并行等待线程结束 + FFmpeg flush + 音频合并
+        def _background_cleanup():
+            # 并行清理所有 recorder
+            def _cleanup_one(rec):
+                if rec._capture_thread and rec._capture_thread.is_alive():
+                    rec._capture_thread.join(timeout=2.0)
+                if rec._write_thread and rec._write_thread.is_alive():
+                    rec._write_thread.join(timeout=10.0)
+                if rec._ffmpeg_proc:
+                    try:
+                        rec._ffmpeg_proc.wait(timeout=5.0)
+                    except subprocess.TimeoutExpired:
+                        rec._ffmpeg_proc.kill()
+                    rec._ffmpeg_proc = None
+                print(f"录制完成: {rec.frame_count} 帧")
+
+            cleanup_threads = []
+            for rec in recorders_snapshot:
+                t = threading.Thread(target=_cleanup_one, args=(rec,))
+                t.start()
+                cleanup_threads.append(t)
+            for t in cleanup_threads:
+                t.join()
+
+            # 音频合并
+            if audio_paths:
+                if output_paths:
                     from recorder.audio import merge_tracks
                     merged = []
-                    for vp in paths:
+                    for vp in output_paths:
                         base, ext = os.path.splitext(vp)
                         final_path = base + "_merged" + ext
-                        result = merge_tracks(vp, apaths, final_path)
+                        result = merge_tracks(vp, audio_paths, final_path)
                         if result == final_path and os.path.exists(final_path):
                             try:
                                 os.remove(vp)
@@ -559,36 +586,31 @@ class RecordController:
                             merged.append(final_path)
                         else:
                             merged.append(vp)
-                    # 清理临时音频文件
-                    for name, ap in apaths.items():
+                    for name, ap in audio_paths.items():
                         try:
                             os.remove(ap)
                         except:
                             pass
-                    # 合并完成后，通知 UI
                     for path in merged:
                         if self.on_recording_complete and os.path.exists(path):
                             self.on_recording_complete(path)
-                    print(f"[合并完成] {len(merged)} 个视频已合并 {len(apaths)} 条音轨")
-
-                threading.Thread(target=_do_merge, args=(output_paths, audio_paths), daemon=True).start()
-            else:
-                # 纯音频模式：无视频，WAV → MP3
-                def _do_audio_only(apaths):
+                    print(f"[合并完成] {len(merged)} 个视频已合并 {len(audio_paths)} 条音轨")
+                else:
                     from recorder.audio.mixer import merge_audio_only
                     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
                     mp3_path = os.path.join(self.output_dir, f"recording_{timestamp}.mp3")
-                    result = merge_audio_only(apaths, mp3_path)
+                    result = merge_audio_only(audio_paths, mp3_path)
                     if result and self.on_recording_complete and os.path.exists(result):
                         self.on_recording_complete(result)
                     print(f"[纯录音完成] 输出: {result}")
+            else:
+                for path in output_paths:
+                    if self.on_recording_complete and os.path.exists(path):
+                        self.on_recording_complete(path)
 
-                threading.Thread(target=_do_audio_only, args=(audio_paths,), daemon=True).start()
-        else:
-            # 无音频，直接回调
-            for path in output_paths:
-                if self.on_recording_complete and os.path.exists(path):
-                    self.on_recording_complete(path)
+            self._saving = False
+
+        threading.Thread(target=_background_cleanup, daemon=True).start()
 
         return output_paths
 

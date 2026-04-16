@@ -401,22 +401,48 @@ class VideoCard(QFrame):
         self.raise_()
         super().enterEvent(event)
 class MonitorSelector(QFrame):
-    """显示器选择器"""
+    """显示器选择器（固定最大高度，超出滚动）"""
 
     def __init__(self, zoom=1.0, parent=None):
         super().__init__(parent)
         self._zoom = zoom
         self.checkboxes = []
         self._hint = None
+        self._inner_layout = None
         self.setup_ui()
 
     def setup_ui(self):
         z = self._zoom
         self.setStyleSheet("background: transparent; border: none;")
-        layout = QVBoxLayout(self)
-        self._layout = layout
-        layout.setContentsMargins(wsc(10, z), wsc(10, z), wsc(10, z), wsc(10, z))
-        layout.setSpacing(wsc(20, z))
+
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
+
+        # 固定最大高度（约3个显示器的高度），超出时滚动
+        max_h = wsc(170, z)
+        self._scroll = QScrollArea()
+        self._scroll.setWidgetResizable(True)
+        self._scroll.setMaximumHeight(max_h)
+        self._scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self._scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self._scroll.setStyleSheet("""
+            QScrollArea { background: transparent; border: none; }
+            QScrollBar:vertical {
+                background: transparent; width: 4px; margin: 0;
+            }
+            QScrollBar::handle:vertical {
+                background: rgba(255,255,255,0.15); border-radius: 2px; min-height: 20px;
+            }
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }
+            QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical { background: none; }
+        """)
+
+        container = QWidget()
+        container.setStyleSheet("background: transparent;")
+        self._inner_layout = QVBoxLayout(container)
+        self._inner_layout.setContentsMargins(wsc(10, z), wsc(10, z), wsc(10, z), wsc(10, z))
+        self._inner_layout.setSpacing(wsc(20, z))
 
         monitors = RecordController.get_monitors()
         for i, m in enumerate(monitors):
@@ -424,13 +450,16 @@ class MonitorSelector(QFrame):
             cb.setChecked(i == 0)
             cb.setMinimumHeight(wsc(45, z))
             cb.setStyleSheet(_cb_style(z, font_sz=22, ind_sz=32, spacing=18))
-            layout.addWidget(cb)
+            self._inner_layout.addWidget(cb)
             self.checkboxes.append(cb)
 
         self._hint = QLabel("可勾选多个显示器同时录制")
         self._hint.setStyleSheet(
             "color: #808080; font-size: %dpx; margin-top: %dpx; background: transparent;" % (wsc(20, z), wsc(12, z)))
-        layout.addWidget(self._hint)
+        self._inner_layout.addWidget(self._hint)
+
+        self._scroll.setWidget(container)
+        outer.addWidget(self._scroll)
 
         if len(monitors) <= 1:
             self.hide()
@@ -445,8 +474,9 @@ class MonitorSelector(QFrame):
     def update_zoom(self, zoom):
         self._zoom = zoom
         z = zoom
-        self._layout.setContentsMargins(wsc(10, z), wsc(10, z), wsc(10, z), wsc(10, z))
-        self._layout.setSpacing(wsc(20, z))
+        self._scroll.setMaximumHeight(wsc(170, z))
+        self._inner_layout.setContentsMargins(wsc(10, z), wsc(10, z), wsc(10, z), wsc(10, z))
+        self._inner_layout.setSpacing(wsc(20, z))
         for cb in self.checkboxes:
             cb.setMinimumHeight(wsc(45, z))
             cb.setStyleSheet(_cb_style(z, font_sz=22, ind_sz=32, spacing=18))
@@ -1230,6 +1260,12 @@ class MainWindow(QMainWindow):
             self._start_record()
 
     def _start_record(self):
+        # 保存未完成时禁止新录制
+        if self.recorder._saving:
+            self.info_label.setText("正在保存上一次录制，请稍候...")
+            self._current_info_text = self.info_label.text()
+            return
+
         # 设置音频开关
         self.recorder.record_mic = self.mic_check.isChecked()
         self.recorder.record_system = self.sys_check.isChecked()
@@ -1300,8 +1336,6 @@ class MainWindow(QMainWindow):
 
         self.info_label.setText("正在保存...")
         self._current_info_text = self.info_label.text()
-        from PySide6.QtWidgets import QApplication
-        QApplication.processEvents()
 
         paths = self.recorder.stop()
         self.timer.stop()
@@ -1324,9 +1358,12 @@ class MainWindow(QMainWindow):
 
         # 如果有音频需要合并，显示提示 (合并会在后台线程执行)
         has_audio = (self.mic_check.isChecked() or self.sys_check.isChecked())
+        saving_style = "color: #ff6b6b; font-size: {}px; background: transparent; border: none;".format(wsc(22, self._zoom))
         if has_audio and paths:
+            self.info_label.setStyleSheet(saving_style)
             self.info_label.setText("正在合并音视频，请稍候...")
         elif has_audio and not paths:
+            self.info_label.setStyleSheet(saving_style)
             self.info_label.setText("正在保存录音，请稍候...")
         else:
             self.info_label.setText("录制完成，共 {} 个视频".format(len(paths)))
@@ -1436,6 +1473,9 @@ class MainWindow(QMainWindow):
         self._video_ready.emit(path)
 
     def _on_complete(self, path):
+        # 恢复 info_label 原始灰色
+        self.info_label.setStyleSheet(
+            "color: #a0a0a0; font-size: {}px; background: transparent; border: none;".format(wsc(22, self._zoom)))
         if os.path.exists(path):
             self._video_paths.append(path)
             card = VideoCard(path, zoom=self._zoom)
