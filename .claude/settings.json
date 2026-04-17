@@ -1,0 +1,34 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git *)",
+      "Bash(python *)",
+      "Bash(pip *)",
+      "Bash(cd *)",
+      "Bash(curl *)",
+      "Bash(pyinstaller *)",
+      "Bash(ssh *)",
+      "Bash(rm *)",
+      "Bash(ls *)",
+      "Bash(mkdir *)",
+      "Bash(mv *)",
+      "Bash(cp *)",
+      "Bash(cat *)",
+      "Bash(echo *)",
+      "Bash(head *)",
+      "Bash(tail *)",
+      "Bash(find *)",
+      "Bash(wc *)",
+      "Bash(sleep *)",
+      "Bash(chmod *)",
+      "Bash(where *)",
+      "Bash(which *)",
+      "Bash(tasklist *)",
+      "Bash(netstat *)",
+      "Bash(cmd.exe *)",
+      "Bash(powershell.exe *)",
+      "Bash(build.bat *)",
+      "Bash(gh *)"
+    ]
+  }
+}
